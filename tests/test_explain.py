@@ -9,7 +9,12 @@ import httpx
 import pytest
 
 from cli.main import FixtureEventLog, build_parser, cmd_explain
-from core.explain import build_evidence_package, explain
+from core.explain import (
+    build_evidence_package,
+    explain,
+    explanation_matches_format,
+    render_evidence_summary,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixture" / "fixture.json"
 
@@ -101,6 +106,7 @@ def test_explain_with_mock_transport() -> None:
         assert req_json["model"] == "qwen/qwen3.8-27b:free"
         assert req_json["messages"][0]["role"] == "system"
         assert "strictly grounded" in req_json["messages"][0]["content"]
+        assert "counterfactual comparison" in req_json["messages"][0]["content"]
         assert "A4" in req_json["messages"][1]["content"]
 
         return httpx.Response(
@@ -201,6 +207,49 @@ def test_cli_cmd_explain_no_llm(
     assert "Diagnosis:" in out
     assert "Minimal causal chain: B3 -> C3 -> A3 -> A4." in out
     assert "Limitations:" in out
+
+
+def test_render_evidence_summary_distinguishes_joint_failure(fixture_log: FixtureEventLog) -> None:
+    pkg = build_evidence_package("A4", fixture_log)
+    summary = render_evidence_summary(pkg)
+
+    assert "B3's incorrect lookup" in summary
+    assert "C3 is marked correct on its own" in summary
+    assert "B3 x C3 interaction score is 1.0" in summary
+    assert "conflicting downstream outputs" not in summary
+    assert "why B2 produced B3's wrong lookup" in summary
+
+
+def test_explanation_format_guard_requires_minimal_event_ids() -> None:
+    evidence = {"minimal_slice": {"event_ids": ["B3", "C3", "A3", "A4"]}}
+    valid = (
+        "Diagnosis: A4 failed.\nEvidence:\n- B3 and C3 fed A3.\n"
+        "Limitations: upstream causes are unknown. B3 C3 A3 A4"
+    )
+    invalid = "Here is the evidence: {\"A4\": \"failure\"}"
+
+    assert explanation_matches_format(valid, evidence) is True
+    assert explanation_matches_format(invalid, evidence) is False
+
+
+def test_cli_falls_back_when_llm_ignores_output_contract(
+    fixture_log: FixtureEventLog,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "cli.main.explain",
+        lambda *_args, **_kwargs: (
+            "A long unstructured research report without the required sections."
+        ),
+    )
+
+    cmd_explain(fixture_log, "A4")
+    out = capsys.readouterr().out
+
+    assert "LLM returned an unusable explanation" in out
+    assert "B3's incorrect lookup" in out
+    assert "A long unstructured research report" not in out
 
 
 def test_explain_acceptance_ground_truth_alignment(fixture_log: FixtureEventLog) -> None:

@@ -46,7 +46,8 @@ Limitations: one short sentence stating what the evidence does not establish.
 Use plain English. Do not reproduce the evidence JSON, discuss your instructions,
 or provide a long research report. Distinguish observed evidence from inference.
 If provenance is marked coarse, say so; otherwise do not add unnecessary provenance
-detail. Never invent facts not present in the evidence package."""
+detail. Treat baseline_value as a counterfactual comparison, not as observed truth.
+Never invent facts not present in the evidence package."""
 
 
 def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
@@ -66,9 +67,13 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     if "customer_status" in ports and "risk_score" in ports:
         status = ports["customer_status"].get("recorded_value")
         risk = ports["risk_score"].get("recorded_value")
+        status_payload = ports["customer_status"].get("source_payload", {})
+        status_note = ""
+        if status_payload.get("ground_truth_bug") is True:
+            status_note = " from B3's incorrect lookup"
         diagnosis = (
             f"{target_id} failed because decision {decision_id} approved a customer using "
-            f"status {status!r} from B3 and risk score {risk!r} from C3."
+            f"status {status!r}{status_note} and risk score {risk!r} from C3."
         )
 
     lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
@@ -76,17 +81,34 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
         lines.append(f"- Minimal causal chain: {' -> '.join(minimal_ids)}.")
     pair = interactions.get("B3_x_C3")
     if pair is not None:
-        lines.append(f"- The reported B3 x C3 interaction score is {pair.get('value')}.")
+        interaction_note = ""
+        risk_payload = ports.get("risk_score", {}).get("source_payload", {})
+        if risk_payload.get("ground_truth_bug") is False:
+            interaction_note = "; C3 is marked correct on its own"
+        lines.append(
+            f"- The reported B3 x C3 interaction score is {pair.get('value')}"
+            f"{interaction_note}."
+        )
     structural = evidence_package.get("structural_slice", {})
     lines.append(
         f"- The structural slice contains {structural.get('count', 0)} events; "
         "the minimal slice is the narrower tested subset."
     )
     lines.append(
-        "Limitations: the evidence identifies the failing inputs and their interaction, "
-        "but does not explain why the upstream tools produced those values."
+        "Limitations: the evidence does not establish why B2 produced B3's wrong lookup "
+        "or why the policy accepted the combined values beyond the recorded policy rule."
     )
     return "\n".join(lines)
+
+
+def explanation_matches_format(text: str, evidence_package: dict[str, Any]) -> bool:
+    """Check the minimum contract required for model-generated CLI output."""
+    if len(text.split()) > 220 or "{" in text or "}" in text:
+        return False
+    if not all(section in text for section in ("Diagnosis:", "Evidence:", "Limitations:")):
+        return False
+    minimal_ids = (evidence_package.get("minimal_slice") or {}).get("event_ids", [])
+    return all(event_id in text for event_id in minimal_ids)
 
 
 def load_env_file() -> None:
@@ -202,6 +224,10 @@ def build_evidence_package(
     interaction_summary: dict[str, Any] | None = None
 
     if contract is not None:
+        def source_payload(event_id: str) -> dict[str, Any]:
+            source_event = getter(event_id) if callable(getter) else None
+            return dict(source_event.payload) if source_event is not None else {}
+
         decision_summary = {
             "decision_id": contract.decision_id,
             "decision_event_id": contract.decision_event_id,
@@ -214,6 +240,7 @@ def build_evidence_package(
                     "field_path": port.field_path,
                     "recorded_value": port.recorded_value,
                     "baseline_value": port.baseline_value,
+                    "source_payload": source_payload(port.source_event_id),
                 }
                 for port in contract.ports
             },

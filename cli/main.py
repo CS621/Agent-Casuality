@@ -23,7 +23,13 @@ from pathlib import Path
 from typing import Any
 
 from core.decision import DecisionContract, create_fixture_decision
-from core.explain import build_evidence_package, explain, load_env_file, render_evidence_summary
+from core.explain import (
+    build_evidence_package,
+    explain,
+    explanation_matches_format,
+    load_env_file,
+    render_evidence_summary,
+)
 from core.provenance import provenance
 from core.reducer import canonical_json, hash_state, reconstruct
 from core.replay import (
@@ -269,7 +275,11 @@ def cmd_explain(
         )
         print(render_evidence_summary(pkg))
         return
-    print(text)
+    if explanation_matches_format(text, pkg):
+        print(text)
+    else:
+        print("[casuality] LLM returned an unusable explanation; showing the evidence summary.")
+        print(render_evidence_summary(pkg))
 
 
 def main(argv: list[str] | None = None) -> None:
