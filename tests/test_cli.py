@@ -18,10 +18,20 @@ def fixture_log() -> object:
 
 
 def test_parser_accepts_fixture_and_command() -> None:
-    args = build_parser().parse_args(["--fixture", str(FIXTURE_PATH), "slice", "A4"])
+    args = build_parser().parse_args(
+        [
+            "--fixture",
+            str(FIXTURE_PATH),
+            "--load-module",
+            "examples.customer_approval",
+            "slice",
+            "A4",
+        ]
+    )
     assert args.command == "slice"
     assert args.event_id == "A4"
     assert args.fixture == FIXTURE_PATH
+    assert args.load_module == ["examples.customer_approval"]
 
 
 def test_cmd_slice_prints_fixture_nine(

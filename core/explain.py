@@ -65,39 +65,60 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
         f"{target_id} ended in failure after decision {decision_id} processed upstream inputs."
     )
     if "customer_status" in ports and "risk_score" in ports:
-        status = ports["customer_status"].get("recorded_value")
-        risk = ports["risk_score"].get("recorded_value")
+        status_port = ports["customer_status"]
+        risk_port = ports["risk_score"]
+        status = status_port.get("recorded_value")
+        risk = risk_port.get("recorded_value")
+        if isinstance(status, dict) and "customer_status" in status:
+            status = status["customer_status"]
+        if isinstance(risk, dict) and "risk_score" in risk:
+            risk = risk["risk_score"]
+        status_source = status_port.get("source_event_id", "customer_status")
+        risk_source = risk_port.get("source_event_id", "risk_score")
         status_payload = ports["customer_status"].get("source_payload", {})
         status_note = ""
         if status_payload.get("ground_truth_bug") is True:
-            status_note = " from B3's incorrect lookup"
+            status_note = " (marked as an incorrect lookup)"
         diagnosis = (
             f"{target_id} failed because decision {decision_id} approved a customer using "
-            f"status {status!r}{status_note} and risk score {risk!r} from C3."
+            f"status {status!r} from {status_source}{status_note} and risk score "
+            f"{risk!r} from {risk_source}."
         )
 
     lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
     if minimal_ids:
         lines.append(f"- Minimal causal chain: {' -> '.join(minimal_ids)}.")
-    pair = interactions.get("B3_x_C3")
+    pair = interactions.get("B3_x_C3") or interactions.get("customer_status_x_risk_score")
+    if pair is None and interactions:
+        pair = next(iter(interactions.values()))
     if pair is not None:
         interaction_note = ""
         risk_payload = ports.get("risk_score", {}).get("source_payload", {})
         if risk_payload.get("ground_truth_bug") is False:
-            interaction_note = "; C3 is marked correct on its own"
+            interaction_note = "; the risk input is marked correct on its own"
+        interaction_name = pair.get("ports", ["upstream inputs"])
         lines.append(
-            f"- The reported B3 x C3 interaction score is {pair.get('value')}"
+            f"- The reported interaction between {interaction_name} is {pair.get('value')}"
             f"{interaction_note}."
         )
     structural = evidence_package.get("structural_slice", {})
-    lines.append(
-        f"- The structural slice contains {structural.get('count', 0)} events; "
-        "the minimal slice is the narrower tested subset."
+    if minimal_ids:
+        lines.append(
+            f"- The structural slice contains {structural.get('count', 0)} events; "
+            "the minimal slice is the narrower tested subset."
+        )
+    else:
+        lines.append(
+            f"- The structural slice contains {structural.get('count', 0)} events; "
+            "no minimal slice was computed for this reopened decision."
+        )
+    limitation = (
+        "Limitations: the evidence does not establish why the upstream tools produced "
+        "these values"
     )
-    lines.append(
-        "Limitations: the evidence does not establish why B2 produced B3's wrong lookup "
-        "or why the policy accepted the combined values beyond the recorded policy rule."
-    )
+    if not minimal_ids:
+        limitation += " or how an unregistered evaluator would behave after restart"
+    lines.append(limitation + ".")
     return "\n".join(lines)
 
 

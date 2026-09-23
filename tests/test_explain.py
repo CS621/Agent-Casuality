@@ -213,11 +213,11 @@ def test_render_evidence_summary_distinguishes_joint_failure(fixture_log: Fixtur
     pkg = build_evidence_package("A4", fixture_log)
     summary = render_evidence_summary(pkg)
 
-    assert "B3's incorrect lookup" in summary
-    assert "C3 is marked correct on its own" in summary
-    assert "B3 x C3 interaction score is 1.0" in summary
+    assert "status 'eligible' from B3 (marked as an incorrect lookup)" in summary
+    assert "the risk input is marked correct on its own" in summary
+    assert "The reported interaction between ['customer_status', 'risk_score'] is 1.0" in summary
     assert "conflicting downstream outputs" not in summary
-    assert "why B2 produced B3's wrong lookup" in summary
+    assert "why the upstream tools produced these values" in summary
 
 
 def test_explanation_format_guard_requires_minimal_event_ids() -> None:
@@ -248,7 +248,7 @@ def test_cli_falls_back_when_llm_ignores_output_contract(
     out = capsys.readouterr().out
 
     assert "LLM returned an unusable explanation" in out
-    assert "B3's incorrect lookup" in out
+    assert "marked as an incorrect lookup" in out
     assert "A long unstructured research report" not in out
 
 

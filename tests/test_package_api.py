@@ -45,3 +45,22 @@ def test_public_decorators_capture_a_causal_decision(tmp_path: Path) -> None:
     assert runtime is not None
     decision = runtime.log.events()[-1]
     assert len(structural_slice(decision.id, runtime.log)) == 4
+
+
+def test_merge_decision_persists_baselines(tmp_path: Path) -> None:
+    casuality.init(tmp_path / "events.db")
+
+    @casuality.merge_decision(
+        ports=["status"],
+        baselines={"status": "ineligible"},
+        decision_type="tests.approval",
+    )
+    def approve(status: str) -> str:
+        return status
+
+    assert approve("eligible") == "eligible"
+    runtime = casuality._runtime
+    assert runtime is not None
+    contract = runtime.log.events()[-1].payload["decision_contract"]
+    assert contract["decision_type"] == "tests.approval"
+    assert contract["ports"][0]["baseline_value"] == "ineligible"

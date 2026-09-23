@@ -51,11 +51,17 @@ class Runtime:
 
         return decorate
 
-    def merge_decision(self, *, ports: list[str] | tuple[str, ...]) -> Callable[[F], F]:
+    def merge_decision(
+        self,
+        *,
+        ports: list[str] | tuple[str, ...],
+        baselines: dict[str, Any] | None = None,
+        decision_type: str | None = None,
+    ) -> Callable[[F], F]:
         def decorate(fn: F) -> F:
-            decision_type = f"{fn.__module__}.{fn.__name__}"
+            resolved_decision_type = decision_type or f"{fn.__module__}.{fn.__name__}"
             register_decision_evaluator(
-                decision_type,
+                resolved_decision_type,
                 lambda values: fn(**values),
             )
 
@@ -107,7 +113,7 @@ class Runtime:
                     run_id=self.run_id,
                     agent_id=self.agent_id,
                     decision_event_id=decision_event.id,
-                    decision_type=decision_type,
+                    decision_type=resolved_decision_type,
                     outcome=str(outcome),
                     ports=[
                         DecisionPort(
@@ -115,8 +121,12 @@ class Runtime:
                             source_event_id=source_events[port].id,
                             field_path="output",
                             recorded_value=values[port],
-                            baseline_value=None,
-                            strategy=AblationStrategy.DEFAULT_SENTINEL,
+                            baseline_value=(baselines or {}).get(port),
+                            strategy=(
+                                AblationStrategy.CANONICAL_BASELINE
+                                if baselines and port in baselines
+                                else AblationStrategy.DEFAULT_SENTINEL
+                            ),
                         )
                         for port in ports
                     ],
@@ -166,9 +176,16 @@ def agent(*, role: str | None = None) -> Callable[[F], F]:
     return _require_runtime().agent(role=role)
 
 
-def merge_decision(*, ports: list[str] | tuple[str, ...]) -> Callable[[F], F]:
+def merge_decision(
+    *,
+    ports: list[str] | tuple[str, ...],
+    baselines: dict[str, Any] | None = None,
+    decision_type: str | None = None,
+) -> Callable[[F], F]:
     """Decorate a function as a captured multi-input decision."""
-    return _require_runtime().merge_decision(ports=ports)
+    return _require_runtime().merge_decision(
+        ports=ports, baselines=baselines, decision_type=decision_type
+    )
 
 
 __all__ = ["Runtime", "agent", "init", "merge_decision"]

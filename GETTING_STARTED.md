@@ -1,15 +1,13 @@
 # Getting Started
 
-Agent-Casuality is a causal event-capture SDK for branching multi-agent
-systems. Phase 1 records execution events, and Phase 2 makes their causal
-agent/event graph queryable in PostgreSQL.
+Agent-Casuality captures and explains failures in branching multi-agent
+systems. The default workflow uses local SQLite, so you can run the CLI and
+Python API without PostgreSQL or an API key.
 
 ## Prerequisites
 
 - Python 3.11 or newer
 - [uv](https://docs.astral.sh/uv/)
-- A Neon PostgreSQL database, or another PostgreSQL 14+ database
-- An Anthropic API key when making real model calls
 
 ## Install
 
@@ -19,6 +17,57 @@ From the repository root:
 uv sync
 ```
 
+Run the complete local test suite:
+
+```powershell
+uv run pytest -q
+```
+
+For the simplest end-to-end example:
+
+```powershell
+uv run python examples/customer_approval.py
+```
+
+The example records a two-agent approval decision in
+`.casuality/example.db`, prints the failure event ID, and prints commands for
+both offline and optional LLM explanations.
+
+Run the offline explanation with the printed command, or use the fixture:
+
+```powershell
+uv run casuality --fixture fixture/fixture.json explain A4 --no-llm
+```
+
+For an LLM explanation, install the optional client and set an OpenRouter key:
+
+```powershell
+uv sync --extra explain
+$env:OPENROUTER_API_KEY = "your-key"
+uv run casuality --fixture fixture/fixture.json explain A4 `
+    --model nex-agi/nex-n2.5-mini:free
+```
+
+For persisted custom decisions, include the module that registers the
+evaluator. The example prints this option automatically:
+
+```powershell
+uv run casuality --load-module examples.customer_approval `
+    --db .casuality/example.db explain <failure-event-id> --no-llm
+```
+
+Free model availability depends on OpenRouter's shared capacity. The offline
+explanation remains available without a key or network access.
+
+## Advanced PostgreSQL setup
+
+PostgreSQL is optional and intended for shared or deployed runs. Install the
+extra and configure a dedicated database:
+
+```powershell
+uv sync --extra postgres
+```
+
 Create a local `.env` file. Do not commit it:
 
 ```dotenv
@@ -26,9 +75,8 @@ DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 ANTHROPIC_API_KEY=your-anthropic-api-key
 ```
 
-`DATABASE_URL` must point to the Neon branch you intend to use for testing.
-Use a dedicated test database or branch because the integration test creates
-tables and leaves test rows behind.
+`DATABASE_URL` must point to the branch intended for testing. Use a dedicated
+database because integration tests create tables and leave test rows behind.
 
 ## Run the checks
 
@@ -167,7 +215,7 @@ edges.
 
 ## Current scope
 
-Phase 1 and Phase 2 are complete. They include:
+The package currently includes:
 
 - `Event` and thread-safe `AgentClock`
 - Anthropic `messages.create` capture
@@ -177,10 +225,12 @@ Phase 1 and Phase 2 are complete. They include:
 - in-memory and PostgreSQL event/agent stores
 - explicit cross-agent causal-parent assignment
 - PostgreSQL-backed `ancestors(event_id)` queries
-
-Phase 3+ features such as state reconstruction, snapshot creation,
-provenance traversal, replay, and minimal slicing are intentionally not yet
-implemented.
+- local SQLite persistence with automatic directory creation
+- state reconstruction and structural slicing
+- exact/coarse provenance traversal
+- counterfactual replay, interaction attribution, and minimal slicing
+- grounded offline and optional LLM explanations
+- `casuality` and `agent-casuality` console commands
 
 ## Contributing
 

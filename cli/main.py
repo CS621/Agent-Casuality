@@ -16,6 +16,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -88,6 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture", type=Path, default=None, help="path to fixture.json")
     parser.add_argument(
         "--db", type=Path, default=None, help="local SQLite path (default: .casuality/events.db)"
+    )
+    parser.add_argument(
+        "--load-module",
+        action="append",
+        default=[],
+        help="import a module before analysis so it can register decision evaluators",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -285,6 +292,11 @@ def cmd_explain(
 def main(argv: list[str] | None = None) -> None:
     load_env_file()
     args = build_parser().parse_args(argv)
+    for module_name in args.load_module:
+        try:
+            importlib.import_module(module_name)
+        except ImportError as exc:
+            sys.exit(f"Could not load evaluator module '{module_name}': {exc}")
     if args.fixture is not None:
         log: Any = load_fixture_backend(args.fixture)
     elif args.db is not None:
