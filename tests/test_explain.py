@@ -205,7 +205,10 @@ def test_cli_cmd_explain_no_llm(
     out = capsys.readouterr().out
     assert '"target_event_id": "A4"' in out
     assert "Diagnosis:" in out
-    assert "Minimal causal chain: B3 -> C3 -> A3 -> A4." in out
+    assert (
+        "Minimal tested chain: customer_status + risk_score -> decision -> terminal failure"
+        in out
+    )
     assert "Limitations:" in out
 
 
@@ -213,7 +216,8 @@ def test_render_evidence_summary_distinguishes_joint_failure(fixture_log: Fixtur
     pkg = build_evidence_package("A4", fixture_log)
     summary = render_evidence_summary(pkg)
 
-    assert "status 'eligible' from B3 (marked as an incorrect lookup)" in summary
+    assert "customer_status='eligible'" in summary
+    assert "marked as an incorrect lookup" in summary
     assert "the risk input is marked correct on its own" in summary
     assert "The reported interaction between ['customer_status', 'risk_score'] is 1.0" in summary
     assert "conflicting downstream outputs" not in summary
@@ -221,10 +225,13 @@ def test_render_evidence_summary_distinguishes_joint_failure(fixture_log: Fixtur
 
 
 def test_explanation_format_guard_requires_minimal_event_ids() -> None:
-    evidence = {"minimal_slice": {"event_ids": ["B3", "C3", "A3", "A4"]}}
+    evidence = {
+        "minimal_slice": {"event_ids": ["opaque-1", "opaque-2"]},
+        "decision": {"ports": {"customer_status": {}, "risk_score": {}}},
+    }
     valid = (
-        "Diagnosis: A4 failed.\nEvidence:\n- B3 and C3 fed A3.\n"
-        "Limitations: upstream causes are unknown. B3 C3 A3 A4"
+        "Diagnosis: A4 failed.\nEvidence:\n- customer_status and risk_score fed the decision.\n"
+        "Limitations: upstream causes are unknown."
     )
     invalid = "Here is the evidence: {\"A4\": \"failure\"}"
 

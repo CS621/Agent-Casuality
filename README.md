@@ -70,7 +70,7 @@ All core backend and analytical phases (Phases 1 through 6) are fully implemente
 - **Phase 6: Grounded Causal Explanation Layer** (`core/explain.py`)
   - Aggregates failure metadata, structural slices, state diffs, minimal slices, exact/coarse provenance chains, and Shapley interaction indices into a unified evidence package (`build_evidence_package`).
   - Generates faithful, natural-language explanations grounded strictly in the causal evidence, citing event IDs and explicitly disclosing coarse boundaries.
-  - Integrates with OpenRouter (`qwen/qwen3.8-27b:free` or configurable via `--model`) with exponential backoff and retry on upstream rate limits.
+  - Integrates with OpenRouter (`qwen/qwen3.8-27b:free` or configurable via `--model`) with exponential backoff and retry on upstream rate limits. LLM explanations are optional and require the `explain` extra plus an `OPENROUTER_API_KEY`.
 
 *(The frontend visualization track runs in parallel against `fixture/mock.py` and the CLI).*
 
@@ -82,34 +82,34 @@ All core backend and analytical phases (Phases 1 through 6) are fully implemente
 
 ```powershell
 # List agents in the run
-uv run python -m cli.main --fixture fixture/fixture.json agents
+casuality --fixture fixture/fixture.json agents
 
 # Structural backward slice (9 events: A1, B1, C1, B2, C2, B3, C3, A3, A4)
-uv run python -m cli.main --fixture fixture/fixture.json slice A4
+casuality --fixture fixture/fixture.json slice A4
 
 # Inspect decision contract and declared semantic ports
-uv run python -m cli.main --fixture fixture/fixture.json why A4
+casuality --fixture fixture/fixture.json why A4
 
 # Reconstruct agent state at a specific logical sequence
-uv run python -m cli.main --fixture fixture/fixture.json reconstruct B 4
+casuality --fixture fixture/fixture.json reconstruct B 4
 
 # Trace exact field-level provenance chain back to source tools
-uv run python -m cli.main --fixture fixture/fixture.json provenance A3.output.approve
+casuality --fixture fixture/fixture.json provenance A3.output.approve
 
 # Compute Shapley values and Shapley-Owen joint interaction index (B3 x C3 = 1.0)
-uv run python -m cli.main --fixture fixture/fixture.json interaction dec_customer_approval_A3
+casuality --fixture fixture/fixture.json interaction dec_customer_approval_A3
 
 # Delta debugging: reduce structural slice down to minimal causal subset (B3, C3, A3, A4)
-uv run python -m cli.main --fixture fixture/fixture.json minimize A4
+casuality --fixture fixture/fixture.json minimize A4
 
 # Test a counterfactual port intervention (flips failure to success)
-uv run python -m cli.main --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
+casuality --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
 
 # Generate grounded LLM failure explanation (using OpenRouter / Qwen)
-uv run python -m cli.main --fixture fixture/fixture.json explain A4
+casuality --fixture fixture/fixture.json explain A4
 
 # Inspect the structured evidence package without making an LLM call
-uv run python -m cli.main --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
+casuality --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
 ```
 
 ### Against Live PostgreSQL
@@ -117,13 +117,13 @@ uv run python -m cli.main --fixture fixture/fixture.json explain A4 --no-llm --r
 Set `DATABASE_URL` in your `.env` file (or environment), then omit `--fixture`:
 
 ```powershell
-uv run python -m cli.main slice <event-uuid>
-uv run python -m cli.main why <decision-or-event-uuid>
-uv run python -m cli.main provenance <field-path>
-uv run python -m cli.main reconstruct <agent-uuid> <target-sequence>
-uv run python -m cli.main interaction <decision-uuid>
-uv run python -m cli.main minimize <event-uuid>
-uv run python -m cli.main explain <event-uuid>
+casuality slice <event-uuid>
+casuality why <decision-or-event-uuid>
+casuality provenance <field-path>
+casuality reconstruct <agent-uuid> <target-sequence>
+casuality interaction <decision-uuid>
+casuality minimize <event-uuid>
+casuality explain <event-uuid>
 ```
 
 ---
@@ -292,6 +292,35 @@ When a multi-agent run fails in production or testing:
 ---
 
 ## Installation & Test Suite
+
+Install the package with no database or service setup:
+
+```powershell
+pip install agent-casuality
+```
+
+The CLI automatically stores local runs in `.casuality/events.db`:
+
+```powershell
+casuality slice <event-id>
+casuality why <event-id>
+casuality explain <event-id> --no-llm
+```
+
+For an LLM explanation, install the optional client and set an OpenRouter key:
+
+```powershell
+pip install "agent-casuality[explain]"
+$env:OPENROUTER_API_KEY = "your-key"
+casuality --fixture fixture/fixture.json explain A4 --model nex-agi/nex-n2.5-mini:free
+```
+
+For PostgreSQL, install the extra and set `DATABASE_URL`:
+
+```powershell
+pip install "agent-casuality[postgres]"
+$env:DATABASE_URL = "postgresql://user:password@host/dbname?sslmode=require"
+```
 
 ```powershell
 # Install dependencies

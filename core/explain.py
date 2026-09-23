@@ -43,8 +43,10 @@ Evidence:
 - 2 to 4 short bullets, citing event IDs where relevant.
 Limitations: one short sentence stating what the evidence does not establish.
 
-Use plain English. Do not reproduce the evidence JSON, discuss your instructions,
-or provide a long research report. Distinguish observed evidence from inference.
+Use plain English and name the semantic inputs (for example, customer_status and
+risk_score). Cite short human-readable event IDs when available, but do not dump
+chains of opaque UUIDs. Do not reproduce the evidence JSON, discuss your
+instructions, or provide a long research report. Distinguish observed evidence from inference.
 If provenance is marked coarse, say so; otherwise do not add unnecessary provenance
 detail. Treat baseline_value as a counterfactual comparison, not as observed truth.
 Never invent facts not present in the evidence package."""
@@ -52,7 +54,6 @@ Never invent facts not present in the evidence package."""
 
 def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     """Render a concise local explanation without calling an LLM."""
-    target_id = evidence_package.get("target_event_id", "the target event")
     decision = evidence_package.get("decision") or {}
     ports = decision.get("ports", {})
     minimal = evidence_package.get("minimal_slice") or {}
@@ -61,8 +62,12 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     interactions = interaction.get("interactions", {})
 
     decision_id = decision.get("decision_event_id", "unknown")
+    outcome = decision.get("outcome", "unknown")
+    target = evidence_package.get("target_event") or {}
+    target_status = target.get("payload", {}).get("status", "failure")
     diagnosis = (
-        f"{target_id} ended in failure after decision {decision_id} processed upstream inputs."
+        f"The terminal event is marked {target_status!r} because decision {decision_id} "
+        f"returned {outcome!r} from its upstream inputs."
     )
     if "customer_status" in ports and "risk_score" in ports:
         status_port = ports["customer_status"]
@@ -73,21 +78,29 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
             status = status["customer_status"]
         if isinstance(risk, dict) and "risk_score" in risk:
             risk = risk["risk_score"]
-        status_source = status_port.get("source_event_id", "customer_status")
-        risk_source = risk_port.get("source_event_id", "risk_score")
         status_payload = ports["customer_status"].get("source_payload", {})
         status_note = ""
         if status_payload.get("ground_truth_bug") is True:
             status_note = " (marked as an incorrect lookup)"
         diagnosis = (
-            f"{target_id} failed because decision {decision_id} approved a customer using "
-            f"status {status!r} from {status_source}{status_note} and risk score "
-            f"{risk!r} from {risk_source}."
+            f"The terminal event is marked {target_status!r} because decision {decision_id} "
+            f"returned {outcome!r} with customer_status={status!r}{status_note} and "
+            f"risk_score={risk!r}."
         )
 
     lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
     if minimal_ids:
-        lines.append(f"- Minimal causal chain: {' -> '.join(minimal_ids)}.")
+        lines.append(
+            f"- Minimal tested chain: customer_status + risk_score -> decision -> terminal "
+            f"failure ({len(minimal_ids)} events)."
+        )
+    if "customer_status" in ports and "risk_score" in ports:
+        status_baseline = ports["customer_status"].get("baseline_value")
+        risk_baseline = ports["risk_score"].get("baseline_value")
+        lines.append(
+            f"- Recorded inputs were customer_status={status!r} and risk_score={risk!r}; "
+            f"their canonical baselines are {status_baseline!r} and {risk_baseline!r}."
+        )
     pair = interactions.get("B3_x_C3") or interactions.get("customer_status_x_risk_score")
     if pair is None and interactions:
         pair = next(iter(interactions.values()))
@@ -105,7 +118,7 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     if minimal_ids:
         lines.append(
             f"- The structural slice contains {structural.get('count', 0)} events; "
-            "the minimal slice is the narrower tested subset."
+            "replay reduced it to the smaller tested subset above."
         )
     else:
         lines.append(
@@ -128,8 +141,8 @@ def explanation_matches_format(text: str, evidence_package: dict[str, Any]) -> b
         return False
     if not all(section in text for section in ("Diagnosis:", "Evidence:", "Limitations:")):
         return False
-    minimal_ids = (evidence_package.get("minimal_slice") or {}).get("event_ids", [])
-    return all(event_id in text for event_id in minimal_ids)
+    ports = (evidence_package.get("decision") or {}).get("ports", {})
+    return all(port_id in text for port_id in ports)
 
 
 def load_env_file() -> None:

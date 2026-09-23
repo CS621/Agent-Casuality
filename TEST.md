@@ -1,15 +1,16 @@
-# Verify Phase 1, Phase 2, and Phase 3 in PostgreSQL
+# Verify Phase 1, Phase 2, and Phase 3
 
-Run the checks first so the database contains a fresh real run:
+Run the checks first:
 
 ```powershell
 uv sync
 .\scripts\check.ps1
 ```
 
-The PostgreSQL tests use the `DATABASE_URL` from `.env`. They create the
-schema if needed and leave test rows behind, so use a dedicated Neon branch
-or database.
+Most tests run locally against SQLite or the fixture and need no database.
+PostgreSQL integration tests use the `DATABASE_URL` from `.env` when it is
+set, and are skipped otherwise. They create the schema if needed and leave
+test rows behind, so use a dedicated Neon branch or database.
 
 The queries below are intended for the Neon SQL Editor. They do not modify
 data. Because each test run uses generated UUIDs, the queries select the
@@ -625,7 +626,7 @@ Expected results:
 
 Purpose: same assertions as §20 but against real persisted provenance edges in
 the database. Run the integration test first so provenance rows exist, then
-query the CLI using `DATABASE_URL` from `.env`.
+query the CLI using `--db` or `--fixture` to point at a database.
 
 **Step 1 — seed the database:**
 
@@ -670,8 +671,8 @@ to events inside the same run in the database.
 
 > [!NOTE]
 > The database backend resolves `DATABASE_URL` from the environment. If you
-> have not set it, the CLI will exit with:
-> `Set DATABASE_URL, or pass --fixture PATH to run without a database.`
+> have not set it, the CLI defaults to a local SQLite database at
+> `.casuality/events.db` instead of failing.
 
 
 
