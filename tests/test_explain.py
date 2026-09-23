@@ -198,8 +198,9 @@ def test_cli_cmd_explain_no_llm(
     cmd_explain(fixture_log, "A4", no_llm=True, raw_evidence=True)
     out = capsys.readouterr().out
     assert '"target_event_id": "A4"' in out
-    assert "Minimal slice: 4 events (B3, C3, A3, A4)" in out
-    assert "Provenance paths tracked:" in out
+    assert "Diagnosis:" in out
+    assert "Minimal causal chain: B3 -> C3 -> A3 -> A4." in out
+    assert "Limitations:" in out
 
 
 def test_explain_acceptance_ground_truth_alignment(fixture_log: FixtureEventLog) -> None:

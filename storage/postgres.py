@@ -110,14 +110,14 @@ class PostgresEventStore:
         self.connection.commit()
 
     def append(self, event: Event) -> Event:
-        try:
-            from psycopg.types.json import Jsonb
-        except ImportError as exc:  # pragma: no cover - dependency is declared by the project
-            raise RuntimeError("psycopg is required for PostgresEventStore") from exc
         record = event.to_record()
         event_id = self._uuid(record["id"], "Event.id")
         run_id = self._uuid(record["run_id"], "Event.run_id")
         agent_id = self._uuid(record["agent_id"], "Event.agent_id")
+        try:
+            from psycopg.types.json import Jsonb
+        except ImportError as exc:  # pragma: no cover - dependency is declared by the project
+            raise RuntimeError("psycopg is required for PostgresEventStore") from exc
         columns = (
             "id, run_id, agent_id, logical_seq, wall_time, event_type, "
             "causal_parent_ids, payload, idempotency_key"

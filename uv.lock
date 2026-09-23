@@ -21,6 +21,8 @@ postgres = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
@@ -37,6 +39,8 @@ provides-extras = ["postgres", "explain", "all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "ruff", specifier = ">=0.9.0" },
     { name = "ty", specifier = ">=0.0.1a1" },

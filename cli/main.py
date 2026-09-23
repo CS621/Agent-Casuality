@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from core.decision import DecisionContract, create_fixture_decision
-from core.explain import build_evidence_package, explain, load_env_file
+from core.explain import build_evidence_package, explain, load_env_file, render_evidence_summary
 from core.provenance import provenance
 from core.reducer import canonical_json, hash_state, reconstruct
 from core.replay import (
@@ -253,13 +253,7 @@ def cmd_explain(
     if no_llm:
         if raw_evidence:
             print("\n" + "=" * 50 + "\n")
-        print(f"Evidence package assembled for {event_id}:")
-        print(f"  Structural slice: {pkg['structural_slice']['count']} events")
-        if pkg.get("minimal_slice"):
-            min_evs = ", ".join(pkg["minimal_slice"].get("event_ids", []))
-            print(f"  Minimal slice: {pkg['minimal_slice']['count']} events ({min_evs})")
-        if pkg.get("provenance"):
-            print(f"  Provenance paths tracked: {len(pkg['provenance'])}")
+        print(render_evidence_summary(pkg))
         return
 
     if raw_evidence:
@@ -273,8 +267,7 @@ def cmd_explain(
             "[casuality] Showing the offline evidence summary instead. "
             "Try --no-llm for this mode."
         )
-        print(f"Evidence package assembled for {event_id}:")
-        print(f"  Structural slice: {pkg['structural_slice']['count']} events")
+        print(render_evidence_summary(pkg))
         return
     print(text)
 

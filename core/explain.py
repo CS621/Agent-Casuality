@@ -32,25 +32,61 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "qwen/qwen3.8-27b:free"
 
 EXPLAIN_SYSTEM_PROMPT = """You are an expert causal debugging assistant analyzing a
-multi-agent system failure.
-Your explanation MUST be strictly grounded in the causal evidence package provided.
+multi-agent system failure. Your explanation MUST be strictly grounded in the supplied
+causal evidence package.
 
-Follow these strict principles:
-1. Cite specific event IDs (e.g. A3, B3, C3, A4) for every claim and causal link you describe.
-2. Strictly distinguish empirical observations (what the event graph, state diff, and
-   interaction test show) from hypotheses or inferences.
-3. If any provenance link is marked 'coarse' (an LLM reasoning boundary without exact field
-   tracking), explicitly state this and do not treat it with the same certainty as an
-   'exact' provenance link.
-4. When reporting why a failure occurred, distinguish whether the cause was:
-   - A single upstream branch alone,
-   - Multiple independent causes, or
-   - A non-linear joint interaction between converging branches (e.g., B3 x C3 where
-     neither alone caused failure, but their combination did).
-5. State plainly when the provided evidence is insufficient to explain something, rather
-   than filling the gap with plausible-sounding guesses.
-6. Never invent or assume causal relationships that are not present in the supplied
-   evidence package."""
+Write for a software developer who has never seen this system. Return no more than
+180 words using exactly this shape:
+
+Diagnosis: one plain-English sentence explaining what failed and which events matter.
+Evidence:
+- 2 to 4 short bullets, citing event IDs where relevant.
+Limitations: one short sentence stating what the evidence does not establish.
+
+Use plain English. Do not reproduce the evidence JSON, discuss your instructions,
+or provide a long research report. Distinguish observed evidence from inference.
+If provenance is marked coarse, say so; otherwise do not add unnecessary provenance
+detail. Never invent facts not present in the evidence package."""
+
+
+def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
+    """Render a concise local explanation without calling an LLM."""
+    target_id = evidence_package.get("target_event_id", "the target event")
+    decision = evidence_package.get("decision") or {}
+    ports = decision.get("ports", {})
+    minimal = evidence_package.get("minimal_slice") or {}
+    minimal_ids = minimal.get("event_ids", [])
+    interaction = evidence_package.get("interaction_attribution") or {}
+    interactions = interaction.get("interactions", {})
+
+    decision_id = decision.get("decision_event_id", "unknown")
+    diagnosis = (
+        f"{target_id} ended in failure after decision {decision_id} processed upstream inputs."
+    )
+    if "customer_status" in ports and "risk_score" in ports:
+        status = ports["customer_status"].get("recorded_value")
+        risk = ports["risk_score"].get("recorded_value")
+        diagnosis = (
+            f"{target_id} failed because decision {decision_id} approved a customer using "
+            f"status {status!r} from B3 and risk score {risk!r} from C3."
+        )
+
+    lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
+    if minimal_ids:
+        lines.append(f"- Minimal causal chain: {' -> '.join(minimal_ids)}.")
+    pair = interactions.get("B3_x_C3")
+    if pair is not None:
+        lines.append(f"- The reported B3 x C3 interaction score is {pair.get('value')}.")
+    structural = evidence_package.get("structural_slice", {})
+    lines.append(
+        f"- The structural slice contains {structural.get('count', 0)} events; "
+        "the minimal slice is the narrower tested subset."
+    )
+    lines.append(
+        "Limitations: the evidence identifies the failing inputs and their interaction, "
+        "but does not explain why the upstream tools produced those values."
+    )
+    return "\n".join(lines)
 
 
 def load_env_file() -> None:
