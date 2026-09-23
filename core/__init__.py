@@ -7,6 +7,7 @@ from .decision import (
     get_decision_evaluator,
     register_decision_evaluator,
 )
+from .explain import EXPLAIN_SYSTEM_PROMPT, build_evidence_package, explain
 from .graph import ancestors, assign_causal_parents, record_causal_event
 from .provenance import (
     InMemoryProvenanceStore,
@@ -45,6 +46,7 @@ __all__ = [
     "DecisionEvaluator",
     "DecisionEvidence",
     "DecisionPort",
+    "EXPLAIN_SYSTEM_PROMPT",
     "InMemoryProvenanceStore",
     "PortIntervention",
     "ProvenanceChain",
@@ -59,12 +61,14 @@ __all__ = [
     "StructuralSlice",
     "ancestors",
     "assign_causal_parents",
+    "build_evidence_package",
     "compute_shapley_interaction",
     "counterfactual_replay",
     "create_decision_contract",
     "create_fixture_decision",
     "create_snapshot",
     "ddmin",
+    "explain",
     "get_decision_evaluator",
     "hash_state",
     "provenance",

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from core.decision import DecisionContract, create_fixture_decision
+from core.explain import build_evidence_package, explain, load_env_file
 from core.provenance import provenance
 from core.reducer import canonical_json, hash_state, reconstruct
 from core.replay import (
@@ -112,6 +113,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_min.add_argument("event_id", help="target event id to minimize slice for (e.g. A4)")
     p_min.add_argument(
         "--budget", type=int, default=200, help="maximum replay evaluations budget (default: 200)"
+    )
+
+    p_exp = sub.add_parser("explain", help="generate grounded LLM explanation for an event")
+    p_exp.add_argument("event_id", help="failure or decision event id (e.g. A4)")
+    p_exp.add_argument(
+        "--api-key", default=None, help="OpenRouter API key (or set OPENROUTER_API_KEY)"
+    )
+    p_exp.add_argument(
+        "--model", default=None, help="OpenRouter model (default: qwen/qwen3.8-27b:free)"
+    )
+    p_exp.add_argument(
+        "--raw-evidence", action="store_true", help="output JSON evidence package"
+    )
+    p_exp.add_argument(
+        "--no-llm", action="store_true", help="output evidence summary without calling LLM"
     )
 
     return parser
@@ -217,7 +233,39 @@ def cmd_minimize(log: Any, event_id: str, budget: int) -> None:
     print(", ".join(minimal_events))
 
 
+def cmd_explain(
+    log: Any,
+    event_id: str,
+    api_key: str | None = None,
+    model: str | None = None,
+    raw_evidence: bool = False,
+    no_llm: bool = False,
+) -> None:
+    pkg = build_evidence_package(event_id, log)
+    if raw_evidence:
+        print(json.dumps(pkg, indent=2, default=str))
+
+    if no_llm:
+        if raw_evidence:
+            print("\n" + "=" * 50 + "\n")
+        print(f"Evidence package assembled for {event_id}:")
+        print(f"  Structural slice: {pkg['structural_slice']['count']} events")
+        if pkg.get("minimal_slice"):
+            min_evs = ", ".join(pkg["minimal_slice"].get("event_ids", []))
+            print(f"  Minimal slice: {pkg['minimal_slice']['count']} events ({min_evs})")
+        if pkg.get("provenance"):
+            print(f"  Provenance paths tracked: {len(pkg['provenance'])}")
+        return
+
+    if raw_evidence:
+        print("\n" + "=" * 50 + "\n")
+
+    text = explain(pkg, api_key=api_key, model=model)
+    print(text)
+
+
 def main(argv: list[str] | None = None) -> None:
+    load_env_file()
     args = build_parser().parse_args(argv)
     log: Any = (
         load_fixture_backend(args.fixture)
@@ -240,6 +288,15 @@ def main(argv: list[str] | None = None) -> None:
         cmd_interaction(log, args.decision_id, args.samples)
     elif args.command == "minimize":
         cmd_minimize(log, args.event_id, args.budget)
+    elif args.command == "explain":
+        cmd_explain(
+            log,
+            args.event_id,
+            api_key=args.api_key,
+            model=args.model,
+            raw_evidence=args.raw_evidence,
+            no_llm=args.no_llm,
+        )
 
 
 if __name__ == "__main__":
