@@ -1,113 +1,310 @@
 # Agent-Casuality
 Causal Debugging for Branching Multi-Agent Systems
 
-## Current implementation
+Agent-Casuality is a causal debugging and observability substrate for concurrent, branching, and merging multi-agent LLM systems. When an autonomous multi-agent run fails, conventional tracing only tells you *what* happened in linear time; Agent-Casuality answers **why** the decision became wrong, attributing failures to specific upstream branches, environmental state mutations, or non-linear joint interactions ($A \times B$).
 
-Phase 1 captures model calls, tool calls/results, memory operations, and agent
-spawns. Phase 2 stores the resulting agent/event graph in PostgreSQL, supports
-explicit cross-agent merge parents, and queries event ancestors. Phase 2.5
-adds the decision SCM contract with semantic ports, resource-version
-invariants for shared state, and the graph completeness validator.
+## Install and Run
 
-Phase 3 completes the MVP:
-
-- `core/reducer.py` reconstructs any agent's state at any `logical_seq`
-  (`reconstruct`), folding one match arm per event type, with a SHA-256
-  state hash over canonical JSON.
-- `core/snapshots.py` stores interval snapshots (every 32 events per agent)
-  that shorten replay, and verifies recorded hashes against a fresh replay.
-- `core/slicing.py` computes the structural slice of an event (recursive
-  SQL on PostgreSQL, BFS fallback in memory) and answers the structural
-  half of `why` for a decision or merge, including its declared semantic
-  ports.
-
-Phase 4 implements field-level provenance (`core/provenance.py`), tracing exact data
-flows through deterministic tools and dead-ending coarse links at unverified LLM boundaries.
-
-Phase 5 adds counterfactual reasoning (`core/replay.py`):
-- `counterfactual_replay` evaluates decision SCMs under semantic port baseline substitutions
-  (`do(Port_i = baseline)`), refusing execution on side-effecting operations (`ReplayUnsafe`).
-- `compute_shapley_interaction` computes single-port Shapley values and pairwise Shapley-Owen
-  interaction indices with bootstrap confidence intervals ($I_{ij} \pm \sigma$, $p$-value) to isolate
-  multi-branch joint interactions under model noise.
-- `ddmin` minimizes structural slices into 1-minimal causal event subsets with frozenset caching
-  and hard replay budget caps.
-
-### Querying a run
+Install the package with no database or service setup:
 
 ```powershell
-# Against the fixture, no database needed:
-uv run python -m cli.main --fixture fixture/fixture.json agents
-uv run python -m cli.main --fixture fixture/fixture.json slice A4
-uv run python -m cli.main --fixture fixture/fixture.json why A4
-uv run python -m cli.main --fixture fixture/fixture.json reconstruct B 4
-uv run python -m cli.main --fixture fixture/fixture.json provenance A3.output.approve
-uv run python -m cli.main --fixture fixture/fixture.json interaction dec_customer_approval_A3
-uv run python -m cli.main --fixture fixture/fixture.json minimize A4
-uv run python -m cli.main --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
-
-# Against PostgreSQL (DATABASE_URL in .env):
-uv run python -m cli.main slice <event-uuid>
+pip install agent-casuality
 ```
 
-`slice A4` returns exactly the nine events from `fixture.json`'s ground
-truth, and `minimize A4` reduces it to the four-event minimal slice (`B3`, `C3`, `A3`, `A4`).
-
-## Install and run
+The CLI automatically stores local runs in `.casuality/events.db`:
 
 ```powershell
+casuality slice <event-id>
+casuality why <event-id>
+casuality explain <event-id> --no-llm
+```
+
+Use `--db path/to/events.db` for a different local database. PostgreSQL is optional; install it with `pip install "agent-casuality[postgres]"` and set `DATABASE_URL` when you need a shared deployment. LLM explanations are also optional: install `pip install "agent-casuality[explain]"` and set `OPENROUTER_API_KEY`. Without an API key, `--no-llm` still produces the complete causal evidence package.
+
+### Three-Line Python API
+
+```python
+import casuality
+
+casuality.init()
+
+@casuality.agent(role="researcher")
+def research(query: str):
+  return search_tool(query)
+
+@casuality.merge_decision(ports=["research_summary", "risk_score"])
+def approve_customer(research_summary, risk_score):
+  return policy(research_summary, risk_score)
+```
+
+The decorators capture tool results, connect merge inputs to their producing events, and persist the causal graph locally. Existing low-level SDK APIs remain available when an application needs explicit clocks, agents, privacy policies, or PostgreSQL storage.
+
+---
+
+## Architecture & Implemented Phases
+
+All core backend and analytical phases (Phases 1 through 6) are fully implemented and verified against PostgreSQL and the ground-truth fixture:
+
+- **Phase 1: Transparent Capture SDK** (`sdk/`)
+  - Intercepts model calls, tool invocations, memory mutations, and agent lifecycles (`sdk/client.py`, `sdk/tools.py`, `sdk/memory.py`, `sdk/lifecycle.py`).
+  - Monotonic distributed sequence allocation via Lamport logical clocks (`sdk/events.py`).
+  - Strict privacy scrubbing for prompts, tool arguments, outputs, and memory (`sdk/privacy.py`).
+- **Phase 2: Causal Event Graph & Storage** (`storage/postgres.py`, `core/graph.py`)
+  - Append-only event store in PostgreSQL with row-level locks and idempotency constraints.
+  - Recursive CTE ancestor graph traversal (`ancestors()`), tracking intra-agent progression, cross-agent spawns, and explicit merge dependencies.
+- **Phase 2.5: Decision SCM Contract & Resource Invariants** (`core/decision.py`, `core/validator.py`)
+  - Formulates decision points as Structural Causal Models (SCMs) over typed `DecisionPort`s with baseline substitution distributions (`DEFAULT_SENTINEL`, `CANONICAL_BASELINE`, `HISTORICAL_PRIOR`).
+  - **Resource-Version Invariant**: Automatically binds shared memory, database, and file mutations to subsequent reads without manual developer annotation, guaranteeing DAG completeness.
+  - Complete graph validator catching dangling edges, cross-run leaks, and timeline continuity breaks.
+- **Phase 3: State Reconstruction & Structural Slicing** (`core/reducer.py`, `core/snapshots.py`, `core/slicing.py`)
+  - Deterministic state reconstruction (`reconstruct()`) folding event match-arms with canonical JSON SHA-256 state hashes.
+  - Snapshot manager verifying state hashes on replay.
+  - Structural slicing (`slice()`, `why()`) isolating the exact DAG subgraph reachable from any failure.
+- **Phase 4: Dual-Grade Field-Level Provenance** (`core/provenance.py`)
+  - Traces exact data origins through deterministic tools and policy functions (`exact`).
+  - Explicitly bounds LLM interpretability by terminating chains at unverified neural boundaries (`coarse`), preventing false certainty.
+- **Phase 5: Counterfactual Replay, Interaction Attribution & Minimal Slicing** (`core/replay.py`)
+  - Merge-local counterfactual replay with hard side-effect safety guards (`ReplayUnsafe`).
+  - **Shapley-Owen Interaction Attribution**: Computes single-port Shapley values $\phi_i$ and pairwise interaction indices $I_{ij}$ with bootstrap standard errors ($I_{ij} \pm \sigma$, $p$-value) to distinguish true multi-branch interactions from stochastic model noise.
+  - **Delta Debugging (`ddmin`)**: Minimizes structural slices into 1-minimal causal event subsets with frozenset caching and replay budget caps.
+- **Phase 6: Grounded Causal Explanation Layer** (`core/explain.py`)
+  - Aggregates failure metadata, structural slices, state diffs, minimal slices, exact/coarse provenance chains, and Shapley interaction indices into a unified evidence package (`build_evidence_package`).
+  - Generates faithful, natural-language explanations grounded strictly in the causal evidence, citing event IDs and explicitly disclosing coarse boundaries.
+  - Integrates with OpenRouter (`qwen/qwen3.8-27b:free` or configurable via `--model`) with exponential backoff and retry on upstream rate limits.
+
+*(The frontend visualization track runs in parallel against `fixture/mock.py` and the CLI).*
+
+---
+
+## Querying a Run via CLI
+
+### Against the Test Fixture (No Database Required)
+
+```powershell
+# List agents in the run
+uv run python -m cli.main --fixture fixture/fixture.json agents
+
+# Structural backward slice (9 events: A1, B1, C1, B2, C2, B3, C3, A3, A4)
+uv run python -m cli.main --fixture fixture/fixture.json slice A4
+
+# Inspect decision contract and declared semantic ports
+uv run python -m cli.main --fixture fixture/fixture.json why A4
+
+# Reconstruct agent state at a specific logical sequence
+uv run python -m cli.main --fixture fixture/fixture.json reconstruct B 4
+
+# Trace exact field-level provenance chain back to source tools
+uv run python -m cli.main --fixture fixture/fixture.json provenance A3.output.approve
+
+# Compute Shapley values and Shapley-Owen joint interaction index (B3 x C3 = 1.0)
+uv run python -m cli.main --fixture fixture/fixture.json interaction dec_customer_approval_A3
+
+# Delta debugging: reduce structural slice down to minimal causal subset (B3, C3, A3, A4)
+uv run python -m cli.main --fixture fixture/fixture.json minimize A4
+
+# Test a counterfactual port intervention (flips failure to success)
+uv run python -m cli.main --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
+
+# Generate grounded LLM failure explanation (using OpenRouter / Qwen)
+uv run python -m cli.main --fixture fixture/fixture.json explain A4
+
+# Inspect the structured evidence package without making an LLM call
+uv run python -m cli.main --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
+```
+
+### Against Live PostgreSQL
+
+Set `DATABASE_URL` in your `.env` file (or environment), then omit `--fixture`:
+
+```powershell
+uv run python -m cli.main slice <event-uuid>
+uv run python -m cli.main why <decision-or-event-uuid>
+uv run python -m cli.main provenance <field-path>
+uv run python -m cli.main reconstruct <agent-uuid> <target-sequence>
+uv run python -m cli.main interaction <decision-uuid>
+uv run python -m cli.main minimize <event-uuid>
+uv run python -m cli.main explain <event-uuid>
+```
+
+---
+
+## Testing in Real-Life Scenarios & Against Real Systems
+
+How do you use Agent-Casuality to trace, reproduce, and debug failures in an actual multi-agent application? Follow this step-by-step workflow:
+
+### Step 1: Configure Environment
+
+Add your database and model provider keys to `.env`:
+
+```ini
+# PostgreSQL database (Neon serverless or local PostgreSQL)
+DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+
+# OpenRouter API Key for Phase 6 explanation layer
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=qwen/qwen3.8-27b:free
+```
+
+### Step 2: Instrument Your Multi-Agent System with the SDK
+
+Wrap your agent system using the Agent-Casuality capture layer:
+
+```python
+import psycopg
+from uuid import uuid4
+from storage.postgres import PostgresEventStore
+from sdk.lifecycle import spawn_agent
+from sdk.tools import capture_tool
+from sdk.memory import CapturedMemory
+from sdk.client import CapturedClient
+from core.decision import create_decision_contract, DecisionPort, AblationStrategy
+from core.replay import register_decision_evaluator
+
+# 1. Connect to PostgreSQL event store
+connection = psycopg.connect(DATABASE_URL)
+store = PostgresEventStore(connection, lock_dsn=DATABASE_URL)
+store.create_schema()
+
+run_id = str(uuid4())
+planner_id = str(uuid4())
+
+# Initialize run and root agent in storage
+with connection.cursor() as cur:
+    cur.execute("INSERT INTO runs (id, name) VALUES (%s, %s)", (run_id, "customer-loan-approval"))
+    cur.execute("INSERT INTO agents (id, run_id, role) VALUES (%s, %s, %s)", (planner_id, run_id, "planner"))
+connection.commit()
+
+# 2. Spawn worker agents with causal parent propagation
+researcher_id, _, researcher_clock = spawn_agent(
+    parent_agent_id=planner_id,
+    parent_clock=planner_clock,
+    run_id=run_id,
+    role="researcher",
+    log=store,
+    agent_store=store,
+)
+
+# 3. Define and capture deterministic tools with exact field provenance
+@capture_tool(
+    tool_name="credit_check",
+    log=store,
+    agent_id=researcher_id,
+    clock=researcher_clock,
+    run_id=run_id,
+    field_sources={"status": "tool_call"},
+)
+def credit_check(customer_id: str) -> dict:
+    # Real tool logic (or service call)
+    return {"status": "eligible"}
+
+# 4. Use CapturedMemory for shared state (Resource-Version Invariant auto-links dependencies!)
+shared_memory = CapturedMemory(agent_id=researcher_id, clock=researcher_clock, log=store, run_id=run_id)
+shared_memory.set("risk_factor", 0.2)  # Any subsequent read by another agent auto-creates a causal edge
+
+# 5. Capture model calls
+client = CapturedClient(
+    agent_id=planner_id,
+    clock=planner_clock,
+    log=store,
+    run_id=run_id,
+)
+# client.messages.create(...) automatically logs model_call and model_response events
+```
+
+### Step 3: Register Decision SCM Contracts at Merge Points
+
+When branches converge into a decision (e.g. planner evaluates results from researcher and risk evaluator):
+
+```python
+# Define how the decision evaluator behaves during counterfactual ablation
+def policy_evaluator(inputs: dict) -> str:
+    status = inputs.get("customer_status")
+    risk = inputs.get("risk_score")
+    if status == "eligible" and risk < 0.5:
+        return "failure"  # Erroneous approval
+    return "success"      # Correct rejection
+
+register_decision_evaluator("loan_approval_policy", policy_evaluator)
+
+# Record the decision contract linking upstream ports
+contract = create_decision_contract(
+    decision_id="dec_loan_approval",
+    run_id=run_id,
+    agent_id=planner_id,
+    decision_event_id=merge_event_id,
+    ports=[
+        DecisionPort(
+            port_id="customer_status",
+            source_event_id=researcher_event_id,
+            field_path="output.status",
+            recorded_value="eligible",
+            baseline_value="ineligible",
+            strategy=AblationStrategy.CANONICAL_BASELINE,
+        ),
+        DecisionPort(
+            port_id="risk_score",
+            source_event_id=risk_event_id,
+            field_path="output.risk_factor",
+            recorded_value=0.2,
+            baseline_value=0.8,
+            strategy=AblationStrategy.CANONICAL_BASELINE,
+        ),
+    ],
+    decision_type="loan_approval_policy",
+    outcome="failure",
+)
+```
+
+### Step 4: Diagnose Live Failures End-to-End
+
+When a multi-agent run fails in production or testing:
+
+1. **Find the Structural Slice**:
+   ```powershell
+   uv run python -m cli.main slice <failure-event-uuid>
+   ```
+   Filters out hundreds of unrelated events across your system, returning only the backward reachable DAG.
+
+2. **Verify Field-Level Origins**:
+   ```powershell
+   uv run python -m cli.main provenance <decision-event-uuid>.output.decision
+   ```
+   Inspects whether inputs were transformed by deterministic code (`exact`) or passed through an LLM (`coarse`).
+
+3. **Minimize with Delta Debugging**:
+   ```powershell
+   uv run python -m cli.main minimize <failure-event-uuid>
+   ```
+   Uses `ddmin` to prune distractor branches down to the exact 1-minimal subset that reproduces the failure.
+
+4. **Isolate Interacting Causes**:
+   ```powershell
+   uv run python -m cli.main interaction <decision-uuid>
+   ```
+   Outputs Shapley values and the interaction index $I_{ij}$. If $I_{ij} \approx 1.0$, you have proven that neither branch was the sole cause—the bug was an interaction between independent agents!
+
+5. **Generate the Grounded Causal Explanation**:
+   ```powershell
+   uv run python -m cli.main explain <failure-event-uuid>
+   ```
+   Calls the grounded explanation engine to synthesize the diagnosis into a clear, trustworthy report citing exact event IDs without hallucination.
+
+---
+
+## Installation & Test Suite
+
+```powershell
+# Install dependencies
 uv sync
+
+# Run all checks (pytest, Ruff linter, Ty type-checker)
 .\scripts\check.ps1
 ```
 
-For the real PostgreSQL scenario, put `DATABASE_URL` in a local `.env` file
-and use a dedicated Neon branch or test database:
+To run only the integration tests against PostgreSQL:
 
 ```powershell
-uv run --env-file .env pytest tests/test_postgres_integration.py tests/test_phase2.py -m integration -q
+uv run pytest tests/test_postgres_integration.py -v
 ```
 
-The integration tests create the schema through the existing PostgreSQL store,
-capture the planner/worker scenario, assign the explicit merge parents, and
-query `ancestors()` against PostgreSQL. See [GETTING_STARTED.md](GETTING_STARTED.md)
-for setup and [TEST.md](TEST.md) for Neon SQL Editor verification queries.
-
-## Day-zero fixture
-
-Use `uv` to run the fixture so everyone gets the same Python entrypoint:
-
-```powershell
-uv run python fixture/mock.py agents
-uv run python fixture/mock.py slice A4
-uv run python fixture/mock.py provenance A3.output.approve
-```
-
-The first command should list agents `A`, `B`, `C`, and `D`. The slice
-command should return the nine-event structural slice for `A4`, and the
-provenance command should show exact links from `A3.output.approve` back
-to `B3.output.customer_status` and `C3.output.risk_score`.
-
-## Tool result output contract
-
-For a `tool_result` event, `payload.output` means only the actual answer
-the tool returned. It should not include extra information like the tool
-name, timing, debug notes, retry info, errors, or test annotations.
-
-For example, if the search tool returns:
-
-```json
-{
-  "customer_status": "eligible"
-}
-```
-
-then that object is `payload.output`.
-
-A provenance path can point inside that output, like
-`B3.output.customer_status`.
-
-If a tool returns a simple value instead of an object, like `"eligible"`
-or `42`, then the whole result is addressed as `B3.output`.
-
-In short: `payload.output` is the clean tool result, and everything else
-about how the tool ran belongs somewhere else in `payload`.
+See [TEST.md](TEST.md) for detailed PostgreSQL verification queries and testing procedures.

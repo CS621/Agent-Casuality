@@ -806,3 +806,136 @@ Expected result: `distinct_runs = 1`. Any value greater than 1 means a
 cross-run boundary was crossed and the `AND p.run_id = c.run_id` join
 condition is missing or broken.
 
+---
+
+## 25. Verify Phase 5: Counterfactual Replay, Interaction Attribution & Minimal Slicing
+
+Purpose: confirms that the decision SCM replay engine evaluates semantic port substitutions, prevents dangerous side effects, minimizes structural slices using delta debugging, and computes Shapley-Owen interaction indices.
+
+### Automated Test Suite Execution
+```powershell
+uv run pytest tests/test_replay.py -v
+```
+
+Expected result: 13 passed tests verifying:
+- Port baseline substitution (`do(Port_i = baseline)`).
+- Side-effect safety enforcement (`ReplayUnsafe` exception thrown when tool is marked side-effecting).
+- Shapley values $\phi_i$ and pairwise interaction index $I_{ij}$ with bootstrap standard errors.
+- Minimal slice `ddmin` reduction on the customer approval scenario from 9 events to 4 events (`B3`, `C3`, `A3`, `A4`).
+
+### CLI Verification Against Fixture
+```powershell
+# 1. Evaluate single counterfactual intervention
+uv run python -m cli.main --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
+# Expected: Original outcome: failure, Counterfactual outcome: success
+
+# 2. Compute Shapley interaction index
+uv run python -m cli.main --fixture fixture/fixture.json interaction dec_customer_approval_A3
+# Expected: B3_x_C3 interaction value = 1.0, std_err = 0.0
+
+# 3. Minimize structural slice via ddmin
+uv run python -m cli.main --fixture fixture/fixture.json minimize A4
+# Expected: Minimal slice of A4: 4 events (ddmin) -> B3, C3, A3, A4
+```
+
+---
+
+## 26. Verify Phase 6: Grounded Causal Explanation
+
+Purpose: verifies that `build_evidence_package` aggregates all structural, reconstructive, provenance, and interaction evidence into a unified package, and that `explain` generates faithful explanations using OpenRouter (`qwen/qwen3.8-27b:free`).
+
+### Automated Test Suite Execution
+```powershell
+uv run pytest tests/test_explain.py -v
+```
+
+Expected result: 10 passed tests verifying:
+- Complete evidence package assembly for failure `A4` (structural slice, minimal slice, provenance chains, Shapley interaction, agent state).
+- Fallback for events without decision contracts (`D3`).
+- Error handling when `OPENROUTER_API_KEY` is missing.
+- Mock HTTP transport verifying system prompt grounding principles (citing event IDs, distinguishing observations from inferences, noting exact provenance).
+- Exponential backoff and retry behavior on HTTP 429 rate limits.
+- Alignment with ground-truth acceptance criteria (L776–782).
+
+### CLI Verification (Offline & Zero-Token)
+```powershell
+uv run python -m cli.main --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
+```
+
+Expected result:
+- Full structured JSON output containing `target_event`, `structural_slice` (9 events), `minimal_slice` (4 events: `B3`, `C3`, `A3`, `A4`), `interaction_attribution` ($B3 \times C3 = 1.0$), and `provenance` (all exact).
+- Summary line: `Minimal slice: 4 events (B3, C3, A3, A4)`, `Provenance paths tracked: 4`.
+
+### Live Explanation with OpenRouter
+```powershell
+# Using default Qwen 3.8 27B model (or override via --model)
+uv run python -m cli.main --fixture fixture/fixture.json explain A4
+```
+
+Expected result:
+- Natural-language explanation citing event IDs `A3`, `B3`, `C3`, `A4`.
+- Explicitly identifies the non-linear joint interaction between `B3` (customer eligibility) and `C3` (risk score).
+- Notes that all provenance links are exact without unverified coarse LLM links.
+
+---
+
+## 27. End-to-End Real-World Scenario Testing Guide
+
+How to test the Causal Debugger against real multi-agent pipelines in production or staging environments:
+
+### Step 1: Verify PostgreSQL Connection and Schema
+Make sure `DATABASE_URL` is set in `.env`:
+```powershell
+Get-Content .env | Select-String "DATABASE_URL"
+```
+
+Verify table creation and connectivity:
+```sql
+SELECT count(*) FROM runs;
+SELECT count(*) FROM events;
+```
+
+### Step 2: Instrument an Actual Multi-Agent Script
+Write a test runner script (e.g. `run_real_scenario.py`) using the SDK components:
+1. `PostgresEventStore`: writes immutable events to PostgreSQL with Lamport sequence numbers.
+2. `spawn_agent`: sets up parent-child relationships and propagates logical clocks.
+3. `@capture_tool`: decorates deterministic or API tools and declares `field_sources` for field-level provenance tracking.
+4. `CapturedMemory`: ensures all shared state mutations are automatically stamped with the Resource-Version Invariant, auto-injecting causal parents on reads.
+5. `CapturedClient`: intercepts model calls, logging prompts, completions, and token metrics.
+6. `create_decision_contract`: binds converging branch outputs into a formal decision SCM with typed baseline values.
+
+### Step 3: Inject an Interacting Failure
+To test multi-branch causal isolation in real life:
+- Worker Agent 1 (`researcher`): queries an external search or database, returning a faulty value (e.g. `customer_status = "eligible"` due to a search record collision).
+- Worker Agent 2 (`risk_service`): queries an internal risk service, returning a borderline value (e.g. `risk_score = 0.2`).
+- Planner Agent 3: merges both values using a policy function (`policy_check_v2`).
+- Final Agent 4: finishes with `status = "failure"` (an ineligible customer was approved).
+
+### Step 4: Run the Full Causal Diagnostic Battery via CLI
+Query the real PostgreSQL run using the CLI:
+
+```powershell
+# 1. Structural slice isolates the causal cone from hundreds of irrelevant events:
+uv run python -m cli.main slice <failure-event-uuid>
+
+# 2. Audit field-level origins through tools:
+uv run python -m cli.main provenance <decision-event-uuid>.output.approve
+
+# 3. Minimize down to the minimal failure-inducing subset:
+uv run python -m cli.main minimize <failure-event-uuid>
+
+# 4. Statistically test whether failure was Branch 1, Branch 2, or Joint:
+uv run python -m cli.main interaction <decision-contract-uuid>
+
+# 5. Synthesize grounded explanation:
+uv run python -m cli.main explain <failure-event-uuid>
+```
+
+### Step 5: Verification Checklist for Real Systems
+- [ ] **DAG Completeness**: All intra-agent and cross-agent dependencies are connected without disconnected islands (`core.validator.check_intra_agent_continuity`).
+- [ ] **Shared Memory Attribution**: Any data consumed from `CapturedMemory` traces back to the writer agent even if `causal_parent_ids` was omitted by developer code.
+- [ ] **Exact vs. Coarse Honesty**: Values produced by deterministic tools are tagged `exact`; values generated by LLM reasoning boundaries are flagged `coarse`.
+- [ ] **Interaction Isolation**: In joint failure modes, the interaction index $I_{ij} \gg 0$ isolates the combination, rather than falsely blaming one innocent agent.
+- [ ] **Explanation Grounding**: The generated diagnosis cites event IDs, avoids hallucinating unrecorded edges, and explains the joint interaction.
+
+

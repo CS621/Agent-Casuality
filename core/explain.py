@@ -17,9 +17,10 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
 from core.decision import DecisionContract, create_fixture_decision
 from core.provenance import provenance
@@ -342,6 +343,8 @@ def explain(
 
     own_client = False
     if client is None:
+        import httpx
+
         client = httpx.Client(timeout=60.0)
         own_client = True
 

@@ -2,7 +2,8 @@
 
 Backends:
     --fixture PATH   run against a fixture.json file (no database needed)
-    (default)        connect to DATABASE_URL and use PostgresEventStore
+    --db PATH        use a local SQLite database (default: .casuality/events.db)
+    (default)        use SQLite, or PostgreSQL when DATABASE_URL is set
 
 Examples:
     uv run python -m cli.main --fixture fixture/fixture.json agents
@@ -34,6 +35,7 @@ from core.replay import (
 )
 from core.slicing import structural_slice, why
 from sdk.events import Event, InMemoryEventLog
+from storage.sqlite import SQLiteEventStore
 
 
 class FixtureEventLog(InMemoryEventLog):
@@ -66,7 +68,7 @@ def load_fixture_backend(path: Path) -> FixtureEventLog:
 def load_postgres_backend() -> Any:
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
-        sys.exit("Set DATABASE_URL, or pass --fixture PATH to run without a database.")
+        sys.exit("DATABASE_URL is not set")
     import psycopg
 
     from storage.postgres import PostgresEventStore
@@ -78,6 +80,9 @@ def load_postgres_backend() -> Any:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Agent-Casuality causal debugger")
     parser.add_argument("--fixture", type=Path, default=None, help="path to fixture.json")
+    parser.add_argument(
+        "--db", type=Path, default=None, help="local SQLite path (default: .casuality/events.db)"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("agents", help="list agents (fixture backend only)")
@@ -260,18 +265,31 @@ def cmd_explain(
     if raw_evidence:
         print("\n" + "=" * 50 + "\n")
 
-    text = explain(pkg, api_key=api_key, model=model)
+    try:
+        text = explain(pkg, api_key=api_key, model=model)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[casuality] LLM explanation unavailable: {exc}")
+        print(
+            "[casuality] Showing the offline evidence summary instead. "
+            "Try --no-llm for this mode."
+        )
+        print(f"Evidence package assembled for {event_id}:")
+        print(f"  Structural slice: {pkg['structural_slice']['count']} events")
+        return
     print(text)
 
 
 def main(argv: list[str] | None = None) -> None:
     load_env_file()
     args = build_parser().parse_args(argv)
-    log: Any = (
-        load_fixture_backend(args.fixture)
-        if args.fixture is not None
-        else load_postgres_backend()
-    )
+    if args.fixture is not None:
+        log: Any = load_fixture_backend(args.fixture)
+    elif args.db is not None:
+        log = SQLiteEventStore(args.db)
+    elif os.environ.get("DATABASE_URL"):
+        log = load_postgres_backend()
+    else:
+        log = SQLiteEventStore()
     if args.command == "agents":
         cmd_agents(log)
     elif args.command == "slice":
