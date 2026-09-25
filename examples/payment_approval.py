@@ -56,7 +56,7 @@ def main() -> None:
         @casuality.agent(role="amount-calculator")
         def calculate_amount(_: str) -> float:
             # Bug/Failure scenario: Amount exceeds limit but passed approval
-            return 2500.0
+            return 800.0
 
         captured_approval = casuality.merge_decision(
             ports=["currency", "amount"],
