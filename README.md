@@ -2,10 +2,7 @@
 
 Causal debugging for branching multi-agent systems.
 
-Agent-Casuality records agent activity as a causal event graph, reopens that graph
-from a separate process, and explains failures using structural slices, decision
-contracts, counterfactual replay, and interaction attribution. The project is
-currently a Python library and CLI; there is no web frontend.
+Agent-Casuality is a causal debugging and observability substrate for branching and merging multi-agent LLM systems. It records agent activity as a causal event graph, persists and reconstructs execution state, and explains decisions through structural slices, decision contracts, and causal dependency analysis.
 
 ## Quick start
 
