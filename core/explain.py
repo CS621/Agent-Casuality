@@ -58,16 +58,17 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     ports = decision.get("ports", {})
     minimal = evidence_package.get("minimal_slice") or {}
     minimal_ids = minimal.get("event_ids", [])
+    minimal_error = minimal.get("error")
     interaction = evidence_package.get("interaction_attribution") or {}
     interactions = interaction.get("interactions", {})
+    interaction_error = interaction.get("error")
 
-    decision_id = decision.get("decision_event_id", "unknown")
     outcome = decision.get("outcome", "unknown")
     target = evidence_package.get("target_event") or {}
-    target_status = target.get("payload", {}).get("status", "failure")
+    target_status = (target.get("payload") or {}).get("status", "failure")
     diagnosis = (
-        f"The terminal event is marked {target_status!r} because decision {decision_id} "
-        f"returned {outcome!r} from its upstream inputs."
+        f"The terminal event is marked {target_status!r} because the decision returned "
+        f"{outcome!r} from its upstream inputs."
     )
     if "customer_status" in ports and "risk_score" in ports:
         status_port = ports["customer_status"]
@@ -83,16 +84,17 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
         if status_payload.get("ground_truth_bug") is True:
             status_note = " (marked as an incorrect lookup)"
         diagnosis = (
-            f"The terminal event is marked {target_status!r} because decision {decision_id} "
-            f"returned {outcome!r} with customer_status={status!r}{status_note} and "
-            f"risk_score={risk!r}."
+            f"The terminal event is marked {target_status!r} because the decision returned "
+            f"{outcome!r} with customer_status={status!r}{status_note} and risk_score={risk!r}."
         )
 
     lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
-    if minimal_ids:
+    if minimal_error:
+        lines.append(f"- Minimal replay unavailable: {minimal_error}.")
+    elif minimal_ids:
         lines.append(
             f"- Minimal tested chain: customer_status + risk_score -> decision -> terminal "
-            f"failure ({len(minimal_ids)} events)."
+            f"{target_status} ({len(minimal_ids)} events)."
         )
     if "customer_status" in ports and "risk_score" in ports:
         status_baseline = ports["customer_status"].get("baseline_value")
@@ -104,21 +106,34 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     pair = interactions.get("B3_x_C3") or interactions.get("customer_status_x_risk_score")
     if pair is None and interactions:
         pair = next(iter(interactions.values()))
-    if pair is not None:
+    if interaction_error:
+        lines.append(f"- Interaction analysis unavailable: {interaction_error}.")
+    elif pair is not None:
         interaction_note = ""
         risk_payload = ports.get("risk_score", {}).get("source_payload", {})
         if risk_payload.get("ground_truth_bug") is False:
             interaction_note = "; the risk input is marked correct on its own"
-        interaction_name = pair.get("ports", ["upstream inputs"])
+        interaction_ports = pair.get("ports")
+        if isinstance(interaction_ports, (list, tuple)) and all(
+            isinstance(port_id, str) for port_id in interaction_ports
+        ):
+            interaction_name = " and ".join(interaction_ports)
+        else:
+            interaction_name = str(interaction_ports or "upstream inputs")
         lines.append(
             f"- The reported interaction between {interaction_name} is {pair.get('value')}"
             f"{interaction_note}."
         )
-    structural = evidence_package.get("structural_slice", {})
+    structural = evidence_package.get("structural_slice") or {}
     if minimal_ids:
         lines.append(
             f"- The structural slice contains {structural.get('count', 0)} events; "
             "replay reduced it to the smaller tested subset above."
+        )
+    elif minimal_error:
+        lines.append(
+            f"- The structural slice contains {structural.get('count', 0)} events; "
+            "replay could not reduce it."
         )
     else:
         lines.append(
@@ -129,7 +144,9 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
         "Limitations: the evidence does not establish why the upstream tools produced "
         "these values"
     )
-    if not minimal_ids:
+    if minimal_error:
+        limitation += "; causal replay evidence is incomplete"
+    elif not minimal_ids:
         limitation += " or how an unregistered evaluator would behave after restart"
     lines.append(limitation + ".")
     return "\n".join(lines)

@@ -1,147 +1,121 @@
 # Contributing
 
-Use stacked pull requests for work that naturally depends on earlier work.
-Each branch should contain one focused change, and each pull request should
-target the branch immediately below it in the stack.
+## Prerequisites
 
-## What a stack looks like
+- Python 3.11 or newer
+- `uv`
+- PostgreSQL only for database integration work
 
-```text
-main
-  └── phase1/events       PR 1 → main
-        └── phase1/capture PR 2 → phase1/events
-              └── phase1/tests   PR 3 → phase1/capture
+## Set up the checkout
+
+```powershell
+uv sync
+uv run pytest -q
 ```
 
-Reviewers can review each change independently. The higher PRs include the
-commits below them until those lower PRs merge.
+The default test path uses in-memory adapters, SQLite, and
+`fixture/fixture.json`. It does not require PostgreSQL or an API key.
 
-## Create a stacked branch
+## Develop
 
-Start from an up-to-date `main` branch:
+Create a focused branch from an up-to-date `main`:
 
 ```powershell
 git switch main
 git pull --ff-only origin main
-git switch -c phase1/events
+git switch -c <short-change-name>
 ```
 
-Make the first focused change, then commit and publish it:
+Keep each change independently understandable. Avoid unrelated formatting
+changes and do not commit `.env`, local databases, generated artifacts, or
+credentials.
+
+Before opening a pull request, run the complete local gate:
 
 ```powershell
-git add sdk/events.py storage/postgres.py
-git commit -m "Add event model and storage contract"
-git push --set-upstream origin phase1/events
+.\scripts\check.ps1
 ```
 
-Open PR 1 with `phase1/events` as the head and `main` as the base.
-
-Create the next branch from the first branch—not from `main`:
+If script execution is blocked:
 
 ```powershell
-git switch phase1/events
-git switch -c phase1/capture
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
 
-Make the next change, commit it, and publish it:
+The standard gates are:
 
 ```powershell
-git add sdk/client.py sdk/tools.py sdk/memory.py
-git commit -m "Capture model, tool, and memory events"
-git push --set-upstream origin phase1/capture
+uv run pytest -q
+uv run ruff check .
+uv run ty check .
 ```
 
-Open PR 2 with `phase1/capture` as the head and `phase1/events` as the base.
-Repeat the same pattern for further branches.
+## Verify the example
 
-## After a lower PR merges
-
-When PR 1 merges into `main`, retarget PR 2 from `phase1/events` to `main` in
-the hosting service. Then rebase the branch locally so it contains only its
-own commits on top of the new `main`:
+Changes to capture, storage, CLI analysis, explanation, or decision replay
+should also run the local end-to-end example:
 
 ```powershell
-git fetch origin
-git switch phase1/capture
-git rebase --onto origin/main phase1/events phase1/capture
-git push --force-with-lease origin phase1/capture
+uv run python examples/customer_approval.py
+uv run casuality --fixture fixture/fixture.json explain A4 --no-llm
 ```
 
-For the next branch, repeat the same operation using its previous base:
+The first command uses SQLite and does not require a database server or model
+API key.
+
+## PostgreSQL changes
+
+For schema, adapter, query, or PostgreSQL-specific changes, create a dedicated
+testing database and provide its URL through `.env`:
+
+```dotenv
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+```
+
+Then run the marked integration tests:
 
 ```powershell
-git switch phase1/tests
-git rebase --onto origin/main phase1/capture phase1/tests
-git push --force-with-lease origin phase1/tests
+uv run --env-file .env pytest `
+    tests/test_postgres_integration.py tests/test_phase2.py `
+    -m integration -q
 ```
 
-Then retarget each open PR to the branch below it, or to `main` once that
-branch has merged.
+These tests create schema objects and leave test rows behind. Never point them
+at a production or shared application database. Do not commit `.env`.
 
-Use `--force-with-lease`, never plain `--force`. It refuses to overwrite
-remote work that appeared after your last fetch.
+If a configured database is temporarily unavailable, report the integration
+check as blocked rather than weakening or skipping the database change in the
+implementation.
 
-## Resolve a rebase conflict
+## Optional explanation changes
+
+Changes to optional LLM explanation behavior should remain compatible with
+offline operation. Run the fixture without `--no-llm` only when test credentials
+are deliberately configured; never log or return the key.
+
+## Pull requests
+
+Before requesting review:
+
+1. Inspect the intended diff.
+2. Run the relevant focused tests.
+3. Run the complete local gate.
+4. Run PostgreSQL integration when the change can affect database behavior.
+5. Explain observable behavior changes and known limitations in the pull
+   request.
+
+Useful inspection commands are:
 
 ```powershell
 git status
-# edit the conflicted files
-git add <resolved-file>
-git rebase --continue
+git diff --check
+git diff
+git log --oneline --decorate -10
 ```
 
-Repeat until the rebase completes, then publish the rewritten branch:
+## CI
 
-```powershell
-git push --force-with-lease origin <branch-name>
-```
-
-To abandon the rebase and return to the previous state:
-
-```powershell
-git rebase --abort
-```
-
-## Contribution rules
-
-- Keep each PR focused and independently understandable.
-- Keep commits small enough to review; avoid unrelated formatting changes.
-- Do not add merge commits to a stack. Rebase the stack instead.
-- Do not rebase a shared branch without coordinating with its other authors.
-- Run the project checks before opening or updating a PR:
-
-  ```powershell
-  .\scripts\check.ps1
-  ```
-
-- For database changes, also run the Neon-backed integration test:
-
-  ```powershell
-  uv run --env-file .env pytest tests/test_postgres_integration.py tests/test_phase2.py -m integration -q
-  ```
-
-  This covers both the Phase 1 PostgreSQL capture paths and the Phase 2
-  schema, explicit cross-agent merge, and ancestor query.
-
-## CI gate
-
-Every push to `main` and every pull request runs the GitHub Actions workflow
-in `.github/workflows/ci.yml`. It has two checks:
-
-- `Tests, Ruff, and ty`
-- `PostgreSQL integration`
-
-Configure both checks as required status checks in the repository's branch
-protection or ruleset for `main`. A pull request should not merge until both
-checks pass.
-
-## Useful inspection commands
-
-```powershell
-git log --oneline --graph --decorate --all
-git diff origin/main...HEAD
-git status
-```
-
-These make the current stack and the exact contents of the active PR easy to
-inspect before pushing.
+Every pull request runs the checks in `.github/workflows/ci.yml`, including
+the applicable test suite, Ruff, `ty`, and PostgreSQL integration where
+configured. A pull request should merge only after all required checks pass and
+review feedback is resolved.

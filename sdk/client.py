@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable
-from typing import Any
+from importlib import import_module
+from typing import Any, cast
 
 from .events import AgentClock, record_event
 
@@ -216,12 +217,12 @@ class CapturedClient:
     ) -> None:
         if client is None:
             try:
-                import anthropic
+                anthropic = import_module("anthropic")
             except ImportError as exc:  # pragma: no cover - deployment setup
                 raise RuntimeError("anthropic is required when client is not injected") from exc
             if api_key is None:
                 raise ValueError("api_key is required when client is not injected")
-            client = anthropic.Anthropic(api_key=api_key)
+            client = cast(Any, anthropic).Anthropic(api_key=api_key)
         self._client = client
         self.agent_id = agent_id
         self.clock = clock

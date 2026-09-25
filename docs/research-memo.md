@@ -1,5 +1,10 @@
 # Research Memo: Causal Architecture, Failure Modes, and Breakthrough Directions for Multi-Agent Decision Attribution
 
+> **Document status:** Research snapshot, not a current product contract or
+> setup guide. Claims and proposed directions are retained for provenance. Use
+> [README.md](../README.md) and [GETTING_STARTED.md](../GETTING_STARTED.md)
+> for implemented behavior.
+
 ---
 
 ## System Model

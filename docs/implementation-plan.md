@@ -1,5 +1,11 @@
 # Causal Debugger, Implementation Guide
 
+> **Document status:** Historical build plan. Its phase assignments,
+> prerequisites, ownership model, and service assumptions do not describe the
+> current repository. Use [README.md](../README.md),
+> [GETTING_STARTED.md](../GETTING_STARTED.md), and [TEST.md](../TEST.md) for
+> current capabilities and workflows.
+
 ## How to use this document
 
 The thesis document (`thesis.md`) explains what this is

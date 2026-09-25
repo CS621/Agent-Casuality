@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 from pathlib import Path
+from typing import cast
 
 import casuality
 from core.decision import register_decision_evaluator
@@ -15,7 +18,7 @@ DECISION_TYPE = "examples.customer_approval.approve_customer"
 def approve_customer(inputs: dict[str, object]) -> str:
     return (
         "approved"
-        if inputs["customer_status"] == "eligible" and inputs["risk_score"] < 0.5
+        if inputs["customer_status"] == "eligible" and cast(float, inputs["risk_score"]) < 0.5
         else "rejected"
     )
 
@@ -42,51 +45,80 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     runtime = casuality.init(args.db)
+    failure_event_id = ""
+    outcome = ""
 
-    @casuality.agent(role="researcher")
-    def research(_: str) -> str:
-        return "eligible"
+    try:
+        @casuality.agent(role="researcher")
+        def research(_: str) -> str:
+            return "eligible"
 
-    @casuality.agent(role="risk-evaluator")
-    def assess_risk(_: str) -> float:
-        return 0.2
+        @casuality.agent(role="risk-evaluator")
+        def assess_risk(_: str) -> float:
+            return 0.2
 
-    captured_approval = casuality.merge_decision(
-        ports=["customer_status", "risk_score"],
-        baselines={"customer_status": "ineligible", "risk_score": 0.8},
-        decision_type=DECISION_TYPE,
-    )(lambda customer_status, risk_score: approve_customer(
-        {"customer_status": customer_status, "risk_score": risk_score}
-    ))
+        captured_approval = casuality.merge_decision(
+            ports=["customer_status", "risk_score"],
+            baselines={"customer_status": "ineligible", "risk_score": 0.8},
+            decision_type=DECISION_TYPE,
+        )(lambda customer_status, risk_score: approve_customer(
+            {"customer_status": customer_status, "risk_score": risk_score}
+        ))
 
-    outcome = captured_approval(research("customer X"), assess_risk("customer X"))
-    decision_event_id = runtime.log.events()[-1].id
-    failure_event, _ = record_event(
-        agent_id=runtime.agent_id,
-        clock=runtime.clock,
-        log=runtime.log,
-        event_type="agent_finish",
-        payload={
-            "final_answer": outcome,
-            "status": "failure",
-            "note": "The customer should not have been approved.",
-        },
-        causal_parent_ids=[decision_event_id],
-        run_id=runtime.run_id,
-    )
+        outcome = captured_approval(research("customer X"), assess_risk("customer X"))
+        decision_event = runtime.log.events()[-1]
+        failure_event, _ = record_event(
+            agent_id=runtime.agent_id,
+            clock=runtime.clock,
+            log=runtime.log,
+            event_type="agent_finish",
+            payload={
+                "final_answer": outcome,
+                "status": "failure",
+                "note": "The customer should not have been approved.",
+            },
+            causal_parent_ids=[decision_event.id],
+            causal_parent_seqs=[decision_event.logical_seq],
+            run_id=runtime.run_id,
+        )
+        failure_event_id = failure_event.id
+    finally:
+        runtime.log.close()
 
-    print(f"Outcome: {outcome}")
+    module_name = DECISION_TYPE.rsplit(".", 1)[0]
+    print("Captured customer approval failure")
+    print(f"Run: {runtime.run_id}")
     print(f"Database: {args.db}")
-    print(f"Failure event: {failure_event.id}")
-    print("\nOffline explanation:")
-    print(
-        f"uv run casuality --load-module {DECISION_TYPE.rsplit('.', 1)[0]} "
-        f"--db {args.db} explain {failure_event.id} --no-llm"
+    print(f"Outcome: {outcome}")
+    print(f"Failure event: {failure_event_id}", flush=True)
+
+    print("\nOffline explanation", flush=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cli.main",
+            "--load-module",
+            module_name,
+            "--db",
+            str(args.db),
+            "explain",
+            failure_event_id,
+            "--no-llm",
+        ],
+        check=True,
     )
-    print("\nOptional LLM explanation:")
+
+    print("\nExplore further")
+    print("Raw evidence:")
     print(
-        f"uv run casuality --load-module {DECISION_TYPE.rsplit('.', 1)[0]} "
-        f"--db {args.db} explain {failure_event.id} --model {args.model}"
+        f"uv run casuality --load-module {module_name} --db \"{args.db}\" "
+        f"explain {failure_event_id} --raw-evidence --no-llm"
+    )
+    print("Optional LLM explanation:")
+    print(
+        f"uv run casuality --load-module {module_name} --db \"{args.db}\" "
+        f"explain {failure_event_id} --model \"{args.model}\""
     )
 
 

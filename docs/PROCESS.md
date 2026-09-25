@@ -1,5 +1,11 @@
 # Agent-Casuality: Architecture & Process (Phases 0 – 3)
 
+> **Document status:** Historical Phase 0–3 architecture snapshot. It is
+> retained to explain the original design, but it does not describe the full
+> current system. Use [README.md](../README.md) and
+> [GETTING_STARTED.md](../GETTING_STARTED.md) for current workflows and
+> limitations.
+
 This document details the end-to-end architecture and execution flow for **Phase 0 through Phase 3** in Agent-Casuality, covering how events are captured, structured into a causal DAG, validated, reduced, and sliced.
 
 ---

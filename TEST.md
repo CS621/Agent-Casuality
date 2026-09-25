@@ -1,4 +1,8 @@
-# Verify Phase 1, Phase 2, and Phase 3
+# Verification and Acceptance Procedures
+
+> This phase-oriented acceptance guide is retained for detailed database and
+> analytical verification. For current onboarding, commands, and the runnable
+> demo, use [README.md](README.md) and [GETTING_STARTED.md](GETTING_STARTED.md).
 
 Run the checks first:
 
@@ -10,9 +14,9 @@ uv sync
 Most tests run locally against SQLite or the fixture and need no database.
 PostgreSQL integration tests use the `DATABASE_URL` from `.env` when it is
 set, and are skipped otherwise. They create the schema if needed and leave
-test rows behind, so use a dedicated Neon branch or database.
+test rows behind, so use a dedicated PostgreSQL database.
 
-The queries below are intended for the Neon SQL Editor. They do not modify
+The queries below can be run in any PostgreSQL SQL client. They do not modify
 data. Because each test run uses generated UUIDs, the queries select the
 latest run by `started_at` instead of hard-coding IDs.
 
@@ -394,15 +398,15 @@ runs these layers in order:
 
 | Layer | What runs | Expected |
 |---|---|---|
-| 1 | Phase 3 unit and property tests (sections 14) | 36 passed |
-| 2 | Full unit suite, integration auto-skipped | 90 passed, 6 skipped |
+| 1 | Phase 3 unit and property tests (section 14) | all selected tests pass |
+| 2 | Full unit suite, integration auto-skipped | all applicable tests pass or skip intentionally |
 | 3 | `ruff check .` and `ty check .` | clean |
 | 4 | Fixture acceptance through the real CLI (section 15) | all assertions hold |
-| 5 | Real PostgreSQL integration tests (section 16) | 5 passed |
+| 5 | Real PostgreSQL integration tests (section 16) | all selected tests pass |
 
-Layer 5 loads `DATABASE_URL` from `.env` and retries once automatically,
-because hosted Neon endpoints occasionally drop DNS. A red failure there that
-disappears on rerun is connectivity, not code.
+Layer 5 loads `DATABASE_URL` from `.env` and retries once. A failure that
+appears only with a hosted database may be connectivity-related; rerun it against
+a stable local PostgreSQL instance before changing code.
 
 ## 14. Run the Phase 3 test files individually
 
@@ -417,17 +421,16 @@ uv run pytest tests/test_postgres_integration.py -m integration -q   # real DB
 
 Expected results:
 
-- `test_reducer.py`: 23 passed. Includes the four property tests named in
-  `docs/implementation-plan.md`: replaying a prefix twice is stable, an
-  unrelated event does not change another agent's state, a causal parent must
-  exist before being referenced, and the snapshot hash matches reconstruction.
-- `test_slicing.py`: 10 passed. `structural_slice(A4)` returns exactly the
-  nine fixture events, excludes agent D, prefers the recursive SQL path when
-  the store provides `ancestors`, survives cyclic parents, and resolves
-  decision ports against recorded payloads.
-- `test_cli.py`: 3 passed.
-- Integration file: 5 passed in roughly two minutes against Neon.
-  Requires `DATABASE_URL` in `.env`, otherwise the tests self-skip.
+- `test_reducer.py`: all selected tests pass, including replay stability,
+  unrelated-event isolation, causal-parent validation, and snapshot/replay
+  equality.
+- `test_slicing.py`: `structural_slice(A4)` returns exactly the nine fixture
+  events, excludes agent D, prefers the recursive SQL path when the store
+  provides `ancestors`, survives cyclic parents, and resolves decision ports
+  against recorded payloads.
+- `test_cli.py`: all selected CLI tests pass.
+- The integration file passes when `DATABASE_URL` points to PostgreSQL and
+  self-skips otherwise.
 
 ## 15. Try the debugger against the fixture, no database
 
@@ -435,10 +438,10 @@ Purpose: exercises the real CLI end to end using `fixture.json` as the event
 store. These are the same assertions layer 4 of the script makes.
 
 ```powershell
-uv run python -m cli.main --fixture fixture/fixture.json agents
-uv run python -m cli.main --fixture fixture/fixture.json slice A4
-uv run python -m cli.main --fixture fixture/fixture.json why A3
-uv run python -m cli.main --fixture fixture/fixture.json reconstruct B 4
+uv run casuality --fixture fixture/fixture.json agents
+uv run casuality --fixture fixture/fixture.json slice A4
+uv run casuality --fixture fixture/fixture.json why A3
+uv run casuality --fixture fixture/fixture.json reconstruct B 4
 ```
 
 Expected results:
@@ -459,7 +462,7 @@ Expected results:
 Against a live run, swap the backend for PostgreSQL:
 
 ```powershell
-uv run python -m cli.main slice <event-uuid>
+uv run casuality slice <event-uuid>
 ```
 
 ## 16. Confirm the Phase 3 integration test wrote valid snapshots
@@ -479,7 +482,7 @@ Get-Content .env | ForEach-Object {
 uv run pytest tests/test_postgres_integration.py -m integration -q
 ```
 
-Then inspect in the Neon SQL Editor:
+Then inspect the result in your PostgreSQL SQL client:
 
 ```sql
 WITH latest_phase3 AS (
@@ -520,8 +523,8 @@ test performs exactly this check, so run it rather than hand-writing SQL:
 uv run pytest "tests/test_postgres_integration.py::test_phase3_reconstruction_snapshots_and_sql_slice_against_postgres" -m integration -v
 ```
 
-Expected result: `1 passed`. The test verifies three things against real
-rows:
+Expected result: the selected test passes. It verifies three things against
+real rows:
 
 - the snapshot-shortcut replay equals a from-scratch replay byte for byte
   (`canonical_json` equality);
@@ -546,10 +549,10 @@ Purpose: runs the full provenance test suite in isolation.
 uv run pytest tests/test_provenance.py -v
 ```
 
-Expected result: 12 passed, 1 skipped. The skipped test is the PostgreSQL
-integration test which self-skips unless `DATABASE_URL` is set.
+Expected result: all local provenance tests pass. The PostgreSQL integration
+test self-skips unless `DATABASE_URL` is set.
 
-The 12 passing tests cover:
+The selected tests cover:
 
 | Test | What it verifies |
 |---|---|
@@ -574,8 +577,8 @@ Purpose: confirms Phase 4 does not break Phases 1–3.
 uv run pytest -q
 ```
 
-Expected result: **102 passed, 7 skipped**. The 7 skipped tests are all
-PostgreSQL integration tests that self-skip without `DATABASE_URL`.
+Expected result: the full suite passes. PostgreSQL integration tests may
+self-skip when `DATABASE_URL` is not configured.
 
 Static analysis must also be clean:
 
@@ -593,10 +596,10 @@ Purpose: exercises the `provenance` subcommand end to end against the bundled
 
 ```powershell
 # Trace an exact multi-hop chain
-uv run python -m cli.main --fixture fixture/fixture.json provenance A3.output.approve
+uv run casuality --fixture fixture/fixture.json provenance A3.output.approve
 
 # Trace an LLM-boundary coarse link
-uv run python -m cli.main --fixture fixture/fixture.json provenance B2.args.query
+uv run casuality --fixture fixture/fixture.json provenance B2.args.query
 ```
 
 Expected results:
@@ -638,14 +641,15 @@ Get-Content .env | ForEach-Object {
 uv run pytest tests/test_provenance.py::test_postgres_provenance_storage_and_recursive_query -v
 ```
 
-Expected: `1 passed`. This seeds `provenance_edges` rows with
-`field_path = "agent.decision.output"` and `field_path = "agent.tool.result"`.
+Expected: the selected integration test passes. It seeds `provenance_edges`
+rows with `field_path = "agent.decision.output"` and
+`field_path = "agent.tool.result"`.
 
 **Step 2 — query the CLI against the database:**
 
 ```powershell
 # Trace the chain rooted at agent.decision.output (uses DATABASE_URL automatically)
-uv run python -m cli.main provenance agent.decision.output
+uv run casuality provenance agent.decision.output
 ```
 
 Expected result: a chain of the form:
@@ -661,7 +665,7 @@ and `source_path` pointing back to the tool result field.
 **Step 3 — confirm traversal stays in one run:**
 
 ```powershell
-uv run python -m cli.main provenance agent.decision.output
+uv run casuality provenance agent.decision.output
 ```
 
 If the integration test has been run multiple times, each run's edges share
@@ -754,7 +758,7 @@ Get-Content .env | ForEach-Object {
 uv run pytest tests/test_provenance.py::test_postgres_provenance_storage_and_recursive_query -v
 ```
 
-Then inspect in the Neon SQL Editor:
+Then inspect the result in your PostgreSQL SQL client:
 
 ```sql
 SELECT
@@ -818,7 +822,8 @@ Purpose: confirms that the decision SCM replay engine evaluates semantic port su
 uv run pytest tests/test_replay.py -v
 ```
 
-Expected result: 13 passed tests verifying:
+Expected result: the selected replay, attribution, and minimization tests pass,
+verifying:
 - Port baseline substitution (`do(Port_i = baseline)`).
 - Side-effect safety enforcement (`ReplayUnsafe` exception thrown when tool is marked side-effecting).
 - Shapley values $\phi_i$ and pairwise interaction index $I_{ij}$ with bootstrap standard errors.
@@ -827,15 +832,15 @@ Expected result: 13 passed tests verifying:
 ### CLI Verification Against Fixture
 ```powershell
 # 1. Evaluate single counterfactual intervention
-uv run python -m cli.main --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
+uv run casuality --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
 # Expected: Original outcome: failure, Counterfactual outcome: success
 
 # 2. Compute Shapley interaction index
-uv run python -m cli.main --fixture fixture/fixture.json interaction dec_customer_approval_A3
+uv run casuality --fixture fixture/fixture.json interaction dec_customer_approval_A3
 # Expected: B3_x_C3 interaction value = 1.0, std_err = 0.0
 
 # 3. Minimize structural slice via ddmin
-uv run python -m cli.main --fixture fixture/fixture.json minimize A4
+uv run casuality --fixture fixture/fixture.json minimize A4
 # Expected: Minimal slice of A4: 4 events (ddmin) -> B3, C3, A3, A4
 ```
 
@@ -850,7 +855,7 @@ Purpose: verifies that `build_evidence_package` aggregates all structural, recon
 uv run pytest tests/test_explain.py -v
 ```
 
-Expected result: 10 passed tests verifying:
+Expected result: the focused suite verifies:
 - Complete evidence package assembly for failure `A4` (structural slice, minimal slice, provenance chains, Shapley interaction, agent state).
 - Fallback for events without decision contracts (`D3`).
 - Error handling when `OPENROUTER_API_KEY` is missing.
@@ -860,23 +865,24 @@ Expected result: 10 passed tests verifying:
 
 ### CLI Verification (Offline & Zero-Token)
 ```powershell
-uv run python -m cli.main --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
+uv run casuality --fixture fixture/fixture.json explain A4 --no-llm --raw-evidence
 ```
 
 Expected result:
-- Full structured JSON output containing `target_event`, `structural_slice` (9 events), `minimal_slice` (4 events: `B3`, `C3`, `A3`, `A4`), `interaction_attribution` ($B3 \times C3 = 1.0$), and `provenance` (all exact).
-- Summary line: `Minimal slice: 4 events (B3, C3, A3, A4)`, `Provenance paths tracked: 4`.
+- Full structured JSON containing `target_event`, `structural_slice` (9 events), `minimal_slice` (4 events: `B3`, `C3`, `A3`, `A4`), `interaction_attribution` ($B3 \times C3 = 1.0$), and exact fixture `provenance`.
+- A plain-text summary with `Diagnosis:`, `Evidence:`, and `Limitations:` sections. The tested-chain line names the semantic inputs and reports four events; the interaction line names `customer_status` and `risk_score` without Python list formatting.
 
 ### Live Explanation with OpenRouter
 ```powershell
 # Using default Qwen 3.8 27B model (or override via --model)
-uv run python -m cli.main --fixture fixture/fixture.json explain A4
+uv run casuality --fixture fixture/fixture.json explain A4
 ```
 
 Expected result:
-- Natural-language explanation citing event IDs `A3`, `B3`, `C3`, `A4`.
-- Explicitly identifies the non-linear joint interaction between `B3` (customer eligibility) and `C3` (risk score).
-- Notes that all provenance links are exact without unverified coarse LLM links.
+- A bounded explanation with `Diagnosis:`, `Evidence:`, and `Limitations:` sections.
+- The semantic ports `customer_status` and `risk_score` are named, and readable fixture event IDs are cited when useful.
+- The non-linear joint interaction between customer eligibility and risk is identified without claiming that structural ancestry alone proves influence.
+- Exact and coarse provenance boundaries remain explicit.
 
 ---
 
@@ -917,26 +923,26 @@ Query the real PostgreSQL run using the CLI:
 
 ```powershell
 # 1. Structural slice isolates the causal cone from hundreds of irrelevant events:
-uv run python -m cli.main slice <failure-event-uuid>
+uv run casuality slice <failure-event-uuid>
 
 # 2. Audit field-level origins through tools:
-uv run python -m cli.main provenance <decision-event-uuid>.output.approve
+uv run casuality provenance <decision-event-uuid>.output.approve
 
 # 3. Minimize down to the minimal failure-inducing subset:
-uv run python -m cli.main minimize <failure-event-uuid>
+uv run casuality minimize <failure-event-uuid>
 
-# 4. Statistically test whether failure was Branch 1, Branch 2, or Joint:
-uv run python -m cli.main interaction <decision-contract-uuid>
+# 4. Measure whether failure was Branch 1, Branch 2, or Joint:
+uv run casuality interaction <decision-contract-uuid>
 
 # 5. Synthesize grounded explanation:
-uv run python -m cli.main explain <failure-event-uuid>
+uv run casuality explain <failure-event-uuid>
 ```
 
 ### Step 5: Verification Checklist for Real Systems
 - [ ] **DAG Completeness**: All intra-agent and cross-agent dependencies are connected without disconnected islands (`core.validator.check_intra_agent_continuity`).
-- [ ] **Shared Memory Attribution**: Any data consumed from `CapturedMemory` traces back to the writer agent even if `causal_parent_ids` was omitted by developer code.
+- [ ] **Shared Memory Attribution**: Data consumed through a registered `CapturedMemory` resource URI traces back to its latest writer in the same run.
 - [ ] **Exact vs. Coarse Honesty**: Values produced by deterministic tools are tagged `exact`; values generated by LLM reasoning boundaries are flagged `coarse`.
-- [ ] **Interaction Isolation**: In joint failure modes, the interaction index $I_{ij} \gg 0$ isolates the combination, rather than falsely blaming one innocent agent.
-- [ ] **Explanation Grounding**: The generated diagnosis cites event IDs, avoids hallucinating unrecorded edges, and explains the joint interaction.
+- [ ] **Interaction Isolation**: In joint failure modes, the interaction index $I_{ij} \gg 0$ identifies a combination effect rather than attributing the recorded outcome to one input alone.
+- [ ] **Explanation Grounding**: The generated diagnosis names semantic inputs, uses readable event IDs when available, avoids unrecorded claims, and explains the joint interaction.
 
 

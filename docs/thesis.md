@@ -1,5 +1,10 @@
 # Causal Debugging for Branching Multi-Agent Systems
 
+> **Document status:** Original research thesis and design rationale. Algorithms,
+> dependencies, and future-work statements are not guaranteed to match the
+> current implementation. Use [README.md](../README.md) and
+> [GETTING_STARTED.md](../GETTING_STARTED.md) for current behavior.
+
 ## Changes from the previous version
 
 This is a rewrite of the ChatGPT document, not a new document. Everything

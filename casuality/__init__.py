@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 from core.decision import (
@@ -59,7 +59,9 @@ class Runtime:
         decision_type: str | None = None,
     ) -> Callable[[F], F]:
         def decorate(fn: F) -> F:
-            resolved_decision_type = decision_type or f"{fn.__module__}.{fn.__name__}"
+            function_name = getattr(fn, "__name__", fn.__class__.__name__)
+            function_module = getattr(fn, "__module__", fn.__class__.__module__)
+            resolved_decision_type = decision_type or f"{function_module}.{function_name}"
             register_decision_evaluator(
                 resolved_decision_type,
                 lambda values: fn(**values),
@@ -80,11 +82,16 @@ class Runtime:
                         (
                             event
                             for event in reversed(prior_events)
-                            if event.payload.get("output") == values[port_id]
+                            if event.run_id == self.run_id
+                            and event.event_type == "tool_result"
+                            and event.payload.get("output") == values[port_id]
                         ),
                         None,
                     )
                     source_parent_ids = [source_event.id] if source_event is not None else []
+                    source_parent_seqs = (
+                        [source_event.logical_seq] if source_event is not None else []
+                    )
                     event, _ = record_event(
                         agent_id=self.agent_id,
                         clock=self.clock,
@@ -93,11 +100,12 @@ class Runtime:
                         event_type="context_update",
                         payload={"output": values[port_id], "port_id": port_id},
                         causal_parent_ids=source_parent_ids,
+                        causal_parent_seqs=source_parent_seqs,
                     )
                     source_events[port_id] = event
                     parent_ids.append(event.id)
                 outcome = fn(*args, **kwargs)
-                decision_id = f"{fn.__name__}:{uuid4()}"
+                decision_id = f"{function_name}:{uuid4()}"
                 decision_event = Event(
                     agent_id=self.agent_id,
                     logical_seq=self.clock.allocate(
@@ -144,7 +152,7 @@ class Runtime:
                 self.clock.set_last_event_id(decision_event.id)
                 return outcome
 
-            return wrapped  # type: ignore[return-value]
+            return cast(F, wrapped)
 
         return decorate
 

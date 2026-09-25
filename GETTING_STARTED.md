@@ -1,15 +1,15 @@
 # Getting Started
 
-Agent-Casuality captures and explains failures in branching multi-agent
-systems. The default workflow uses local SQLite, so you can run the CLI and
-Python API without PostgreSQL or an API key.
+Agent-Casuality captures branching agent runs, persists their causal event
+graphs, and explains failures from local SQLite. PostgreSQL, external model
+providers, and API keys are optional.
 
 ## Prerequisites
 
 - Python 3.11 or newer
-- [uv](https://docs.astral.sh/uv/)
+- `uv`
 
-## Install
+## Install the source checkout
 
 From the repository root:
 
@@ -17,223 +17,208 @@ From the repository root:
 uv sync
 ```
 
-Run the complete local test suite:
+This installs the project in editable mode and provides the `casuality` and
+`agent-casuality` commands.
 
-```powershell
-uv run pytest -q
-```
-
-For the simplest end-to-end example:
+## Run the end-to-end demo
 
 ```powershell
 uv run python examples/customer_approval.py
 ```
 
-The example records a two-agent approval decision in
-`.casuality/example.db`, prints the failure event ID, and prints commands for
-both offline and optional LLM explanations.
+The command is self-contained and does not require PostgreSQL, an API key, or
+network access. It performs a complete local flow:
 
-Run the offline explanation with the printed command, or use the fixture:
+1. `casuality.init()` creates `.casuality/example.db`.
+2. Two decorated agents return eligibility and risk values.
+3. A merge decision records semantic ports and canonical baselines.
+4. A terminal `agent_finish` event marks the incorrect approval as a failure.
+5. SQLite is closed.
+6. A fresh `casuality` CLI process reloads the evaluator module, reopens the
+   database, and renders the offline evidence package.
+
+The key result is:
+
+```text
+Diagnosis: The terminal event is marked 'failure' because the decision returned 'approved' with customer_status='eligible' and risk_score=0.2.
+Evidence:
+- Minimal tested chain: customer_status + risk_score -> decision -> terminal failure (4 events).
+- Recorded inputs were customer_status='eligible' and risk_score=0.2; their canonical baselines are 'ineligible' and 0.8.
+- The reported interaction between customer_status and risk_score is 1.0.
+- The structural slice contains 8 events; replay reduced it to the smaller tested subset above.
+Limitations: the evidence does not establish why the upstream tools produced these values.
+```
+
+The demo also prints the run ID, failure event ID, database path, raw-evidence
+command, and optional LLM command. Repeated runs append to the same ignored
+database without linking events across `run_id` values.
+
+## Inspect the persisted run
+
+Use the failure event ID printed by the demo:
+
+```powershell
+uv run casuality --load-module examples.customer_approval `
+    --db .casuality/example.db slice <failure-event-id>
+
+uv run casuality --load-module examples.customer_approval `
+    --db .casuality/example.db explain <failure-event-id> --no-llm
+```
+
+`--load-module` is required for persisted custom decisions because the decision
+evaluator is application code and is not serialized into the event payload.
+
+Use `--raw-evidence` when the complete JSON package is needed:
+
+```powershell
+uv run casuality --load-module examples.customer_approval `
+    --db .casuality/example.db explain <failure-event-id> `
+    --raw-evidence --no-llm
+```
+
+## Use the deterministic fixture
+
+The fixture is a separate, readable control case:
 
 ```powershell
 uv run casuality --fixture fixture/fixture.json explain A4 --no-llm
 ```
 
-For an LLM explanation, install the optional client and set an OpenRouter key:
+Useful fixture commands include:
+
+```powershell
+uv run casuality --fixture fixture/fixture.json agents
+uv run casuality --fixture fixture/fixture.json slice A4
+uv run casuality --fixture fixture/fixture.json why A4
+uv run casuality --fixture fixture/fixture.json reconstruct B 4
+uv run casuality --fixture fixture/fixture.json provenance A3.output.approve
+uv run casuality --fixture fixture/fixture.json replay dec_customer_approval_A3 customer_status=ineligible
+uv run casuality --fixture fixture/fixture.json interaction dec_customer_approval_A3
+uv run casuality --fixture fixture/fixture.json minimize A4
+```
+
+The fixture's ground-truth annotations make it useful for tests and
+presentations. It is not a substitute for demonstrating live capture and
+cross-process persistence.
+
+## Understand the convenience API
+
+The complete example is `examples/customer_approval.py`. Its local flow uses:
+
+- `casuality.init(path)` to create a SQLite runtime;
+- `@casuality.agent(role=...)` to capture agent function calls and results; and
+- `@casuality.merge_decision(...)` to create decision ports, baselines, a
+  decision contract, and an evaluator registration.
+
+For merge inputs, the convenience API looks for the most recent matching
+`tool_result` in the active run. This is appropriate for the controlled demo but
+is value-based inference, not explicit field provenance. Use `sdk/events.py`,
+`sdk/tools.py`, and `core/decision.py` directly when causal parents, clocks,
+field sources, or storage behavior must be controlled explicitly.
+
+## CLI backends
+
+The CLI supports these backend selectors:
+
+- `--fixture PATH`: load a JSON fixture without a database;
+- `--db PATH`: read a local SQLite database; or
+- no selector with `DATABASE_URL` set: read PostgreSQL.
+
+Without an explicit selector or `DATABASE_URL`, the CLI reads
+`.casuality/events.db`. It does not create application events; Python capture
+code writes the database.
+
+The `agents` command currently supports only the fixture backend because SQLite
+does not persist the agent metadata currently needed by that command.
+
+## Optional OpenRouter explanation
+
+Install the optional HTTP dependency and set a key only if you want a
+model-generated explanation:
 
 ```powershell
 uv sync --extra explain
 $env:OPENROUTER_API_KEY = "your-key"
 uv run casuality --fixture fixture/fixture.json explain A4 `
-    --model nex-agi/nex-n2.5-mini:free
+    --model "your/model"
 ```
 
-For persisted custom decisions, include the module that registers the
-evaluator. The example prints this option automatically:
+The offline summary remains available with `--no-llm`. If the model call fails or
+returns text that violates the output contract, the CLI falls back to the
+grounded offline summary.
 
-```powershell
-uv run casuality --load-module examples.customer_approval `
-    --db .casuality/example.db explain <failure-event-id> --no-llm
-```
+## Optional PostgreSQL setup
 
-Free model availability depends on OpenRouter's shared capacity. The offline
-explanation remains available without a key or network access.
-
-## Advanced PostgreSQL setup
-
-PostgreSQL is optional and intended for shared or deployed runs. Install the
-extra and configure a dedicated database:
+Install the PostgreSQL extra:
 
 ```powershell
 uv sync --extra postgres
 ```
 
-Create a local `.env` file. Do not commit it:
+Create a local `.env` file for integration testing:
 
 ```dotenv
 DATABASE_URL=postgresql://user:password@host/database?sslmode=require
-ANTHROPIC_API_KEY=your-anthropic-api-key
 ```
 
-`DATABASE_URL` must point to the branch intended for testing. Use a dedicated
-database because integration tests create tables and leave test rows behind.
+Do not commit `.env`. `DATABASE_URL` must point to a dedicated testing database
+because integration tests create schema objects and leave test rows behind.
 
-## Run the checks
-
-Run all local checks with one command:
+Run the marked PostgreSQL integration tests with:
 
 ```powershell
-.\scripts\check.ps1
+uv run --env-file .env pytest `
+    tests/test_postgres_integration.py tests/test_phase2.py `
+    -m integration -q
 ```
 
-If PowerShell blocks local scripts, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
-```
-
-The script runs pytest, Ruff, and ty. If `.env` exists, it loads the file so
-the PostgreSQL integration test runs as well.
-
-Run the real Phase 1 and Phase 2 PostgreSQL integration tests with the `.env`
-file loaded:
-
-```powershell
-uv run --env-file .env pytest tests/test_postgres_integration.py tests/test_phase2.py -m integration -q
-```
-
-Expected result:
-
-```text
-3 passed
-```
-
-To run the complete suite with PostgreSQL enabled:
+Run the full suite with PostgreSQL enabled only when a test database is
+intentionally available:
 
 ```powershell
 uv run --env-file .env pytest -q
 ```
 
-The equivalent one-command version is:
+Detailed schema and query verification is in [TEST.md](TEST.md). Those SQL
+queries work in PostgreSQL generally; a hosted PostgreSQL SQL editor is
+optional.
+
+## Run all checks
+
+Run the standard local gates directly:
+
+```powershell
+uv run pytest -q
+uv run ruff check .
+uv run ty check .
+```
+
+PowerShell users can run the same commands with:
 
 ```powershell
 .\scripts\check.ps1
 ```
 
-If `DATABASE_URL` is not loaded, the PostgreSQL test is skipped rather than
-run against a database.
+If script execution is blocked:
 
-## Minimal in-memory capture example
-
-This example exercises tool and memory capture without making a network call:
-
-```python
-from sdk.events import AgentClock, InMemoryEventLog
-from sdk.memory import CapturedMemory
-from sdk.tools import capture_tool
-
-log = InMemoryEventLog()
-clock = AgentClock()
-
-
-@capture_tool
-def lookup_customer(customer_id: str) -> dict[str, str]:
-    return {"customer_id": customer_id, "status": "eligible"}
-
-
-result = lookup_customer(
-    "customer-123",
-    agent_id="worker-1",
-    clock=clock,
-    log=log,
-    invocation_id="lookup-customer-123",
-)
-
-memory = CapturedMemory(agent_id="worker-1", clock=clock, log=log)
-memory.set("customer_status", result["status"])
-assert memory.get("customer_status") == "eligible"
-
-for event in log.events():
-    print(event.logical_seq, event.event_type, event.causal_parent_ids)
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
 
-The tool produces a `tool_call` followed by a `tool_result`. The result has
-the call event ID in `causal_parent_ids`. Memory operations produce
-`memory_read` and `memory_write` events.
+`scripts/check.ps1` loads `.env` before testing. If `DATABASE_URL` is present,
+database-aware tests may run against that configured database.
 
-## Capture a real Anthropic call
+## Current boundaries
 
-`CapturedClient` exposes the familiar `messages.create` call:
-
-```python
-import os
-
-from sdk.client import CapturedClient
-from sdk.events import AgentClock, InMemoryEventLog
-
-client = CapturedClient(
-    api_key=os.environ["ANTHROPIC_API_KEY"],
-    agent_id="planner",
-    clock=AgentClock(),
-    log=InMemoryEventLog(),
-)
-
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=100,
-    messages=[{"role": "user", "content": "Summarize this result."}],
-)
-```
-
-The wrapper returns the original Anthropic response and records a
-`model_call` event.
-When using PostgreSQL, pass a `PostgresEventStore` with the original database
-DSN as `lock_dsn`, a real `run_id`, and make sure the agent row already exists.
-The DSN is needed because psycopg omits the password from
-`connection.info.dsn`, while concurrent tool retries use a separate
-transaction-scoped PostgreSQL advisory lock.
-
-## Verify the data in Neon
-
-Open the Neon SQL Editor for the same branch used by `DATABASE_URL`. Run the
-queries in [TEST.md](TEST.md). They verify the Phase 1 capture data and the
-Phase 2 PostgreSQL graph:
-
-- required Phase 2 tables, columns, indexes, and foreign keys
-- expected agent and event counts for the integration runs
-- workers reference the planner and their spawn events
-- worker model, tool-call, and tool-result branches are linked
-- the planner merge preserves both worker result IDs
-- graph ancestors include both worker branches
-- every causal parent resolves to a real event
-- no agent has duplicate logical sequence numbers
-
-The event count query uses `COUNT(DISTINCT ...)` because joining agents and
-events multiplies rows. `TEST.md` explains the purpose and expected result of
-each query, including why logical sequence numbers must not be used as causal
-edges.
-
-## Current scope
-
-The package currently includes:
-
-- `Event` and thread-safe `AgentClock`
-- Anthropic `messages.create` capture
-- tool invocation/result capture with retry idempotency
-- captured memory `get`, `set`, and `delete`
-- agent spawning with `spawned_at_event_id`
-- in-memory and PostgreSQL event/agent stores
-- explicit cross-agent causal-parent assignment
-- PostgreSQL-backed `ancestors(event_id)` queries
-- local SQLite persistence with automatic directory creation
-- state reconstruction and structural slicing
-- exact/coarse provenance traversal
-- counterfactual replay, interaction attribution, and minimal slicing
-- grounded offline and optional LLM explanations
-- `casuality` and `agent-casuality` console commands
-
-## Contributing
-
-Contributions use Git-based stacked pull requests for dependent changes. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the branch layout, PR base selection,
-rebasing commands, and safe force-push workflow.
+- Merge replay evaluates a registered decision function in recorded-output mode;
+  downstream side effects are not re-executed.
+- Exact interaction enumeration supports up to four decision ports.
+- Bootstrap sign proportions are descriptive and are not p-values.
+- Structural slices express declared dependency, not proven influence.
+- Privacy redaction is opt-in, best-effort, and focused on configured top-level
+  payload keys.
+- Resource-version tracking requires an explicit resource URI; it does not
+  discover arbitrary database or filesystem reads automatically.
+- The high-level local API does not yet record the fixture's exact field-level
+  provenance chain.
+- The project currently exposes a CLI and Python API, not a frontend.

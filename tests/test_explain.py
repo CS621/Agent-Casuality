@@ -219,12 +219,38 @@ def test_render_evidence_summary_distinguishes_joint_failure(fixture_log: Fixtur
     assert "customer_status='eligible'" in summary
     assert "marked as an incorrect lookup" in summary
     assert "the risk input is marked correct on its own" in summary
-    assert "The reported interaction between ['customer_status', 'risk_score'] is 1.0" in summary
+    assert "The reported interaction between customer_status and risk_score is 1.0" in summary
+    assert pkg["decision"]["decision_event_id"] not in summary
     assert "conflicting downstream outputs" not in summary
     assert "why the upstream tools produced these values" in summary
 
 
-def test_explanation_format_guard_requires_minimal_event_ids() -> None:
+def test_render_evidence_summary_surfaces_analysis_errors() -> None:
+    summary = render_evidence_summary(
+        {
+            "target_event": {"payload": {"status": "failure"}},
+            "decision": {
+                "outcome": "approved",
+                "ports": {
+                    "customer_status": {
+                        "recorded_value": "eligible",
+                        "baseline_value": "ineligible",
+                    },
+                    "risk_score": {"recorded_value": 0.2, "baseline_value": 0.8},
+                },
+            },
+            "structural_slice": {"count": 8},
+            "minimal_slice": {"error": "evaluator unavailable"},
+            "interaction_attribution": {"error": "interaction unavailable"},
+        }
+    )
+
+    assert "Minimal replay unavailable: evaluator unavailable." in summary
+    assert "Interaction analysis unavailable: interaction unavailable." in summary
+    assert "causal replay evidence is incomplete" in summary
+
+
+def test_explanation_format_guard_requires_semantic_port_names() -> None:
     evidence = {
         "minimal_slice": {"event_ids": ["opaque-1", "opaque-2"]},
         "decision": {"ports": {"customer_status": {}, "risk_score": {}}},
