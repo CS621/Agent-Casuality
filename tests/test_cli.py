@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -87,3 +88,49 @@ def test_customer_approval_example_runs_end_to_end(tmp_path: Path) -> None:
     assert "Explore further" in result.stdout
     assert "Raw evidence:" in result.stdout
     assert result.stdout.index("Offline explanation") < result.stdout.index("Diagnosis:")
+
+
+def test_payment_approval_example_records_over_limit_approval(tmp_path: Path) -> None:
+    database = tmp_path / "payment-approval.db"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "examples" / "payment_approval.py"),
+            "--db",
+            str(database),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert "Captured payment approval failure" in result.stdout
+    assert "Outcome: approved" in result.stdout
+    assert "currency='USD'" in result.stdout
+    assert "amount=2500.0" in result.stdout
+    assert "canonical baselines are currency='EUR' and amount=100.0" in result.stdout
+    assert (
+        "Minimal tested chain: currency + amount -> decision -> terminal failure" in result.stdout
+    )
+    assert "customer_status" not in result.stdout
+    assert "The reported interaction between currency and amount is 1.0" in result.stdout
+
+    payloads = [
+        json.loads(row[0])
+        for row in sqlite3.connect(database).execute("SELECT payload FROM events")
+    ]
+    notes = [
+        payload["note"] for payload in payloads if isinstance(payload.get("note"), str)
+    ]
+    assert "USD payment of 2500.0 exceeded the 1000.0 limit and was approved." in notes
+    amount_ports = [
+        port
+        for payload in payloads
+        for port in (payload.get("decision_contract") or {}).get("ports", [])
+        if isinstance(port, dict) and port.get("port_id") == "amount"
+    ]
+    assert amount_ports
+    assert amount_ports[0]["recorded_value"] == 2500.0
+    assert amount_ports[0]["baseline_value"] == 100.0

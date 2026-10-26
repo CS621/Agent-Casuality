@@ -52,6 +52,10 @@ detail. Treat baseline_value as a counterfactual comparison, not as observed tru
 Never invent facts not present in the evidence package."""
 
 
+def _format_port_values(ports: dict[str, Any], field: str) -> str:
+    return " and ".join(f"{port_id}={port.get(field)!r}" for port_id, port in ports.items())
+
+
 def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
     """Render a concise local explanation without calling an LLM."""
     decision = evidence_package.get("decision") or {}
@@ -87,13 +91,24 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
             f"The terminal event is marked {target_status!r} because the decision returned "
             f"{outcome!r} with customer_status={status!r}{status_note} and risk_score={risk!r}."
         )
+    elif ports:
+        diagnosis = (
+            f"The terminal event is marked {target_status!r} because the decision returned "
+            f"{outcome!r} with {_format_port_values(ports, 'recorded_value')}."
+        )
 
     lines = [f"Diagnosis: {diagnosis}", "Evidence:"]
     if minimal_error:
         lines.append(f"- Minimal replay unavailable: {minimal_error}.")
     elif minimal_ids:
+        if "customer_status" in ports and "risk_score" in ports:
+            chain = "customer_status + risk_score"
+        elif ports:
+            chain = " + ".join(ports)
+        else:
+            chain = "upstream inputs"
         lines.append(
-            f"- Minimal tested chain: customer_status + risk_score -> decision -> terminal "
+            f"- Minimal tested chain: {chain} -> decision -> terminal "
             f"{target_status} ({len(minimal_ids)} events)."
         )
     if "customer_status" in ports and "risk_score" in ports:
@@ -102,6 +117,13 @@ def render_evidence_summary(evidence_package: dict[str, Any]) -> str:
         lines.append(
             f"- Recorded inputs were customer_status={status!r} and risk_score={risk!r}; "
             f"their canonical baselines are {status_baseline!r} and {risk_baseline!r}."
+        )
+    elif ports:
+        lines.append(
+            "- Recorded inputs were "
+            f"{_format_port_values(ports, 'recorded_value')}; "
+            "their canonical baselines are "
+            f"{_format_port_values(ports, 'baseline_value')}."
         )
     pair = interactions.get("B3_x_C3") or interactions.get("customer_status_x_risk_score")
     if pair is None and interactions:

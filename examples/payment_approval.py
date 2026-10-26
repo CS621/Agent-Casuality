@@ -16,11 +16,12 @@ DECISION_TYPE = "examples.payment_approval.approve_payment"
 
 
 def approve_payment(inputs: dict[str, object]) -> str:
-    return (
-        "approved"
-        if inputs["currency"] == "USD" and cast(float, inputs["amount"]) <= 1000.0
-        else "rejected"
-    )
+    amount = cast(float, inputs["amount"])
+    # Bug: the limit comparison is reversed, so amounts above $1,000 are approved.
+    over_limit = amount > 1000.0
+    if inputs["currency"] == "USD" and over_limit:
+        return "approved"
+    return "rejected"
 
 
 register_decision_evaluator(DECISION_TYPE, approve_payment)
@@ -55,12 +56,11 @@ def main() -> None:
 
         @casuality.agent(role="amount-calculator")
         def calculate_amount(_: str) -> float:
-            # Bug/Failure scenario: Amount exceeds limit but passed approval
-            return 800.0
+            return 2500.0
 
         captured_approval = casuality.merge_decision(
             ports=["currency", "amount"],
-            baselines={"currency": "EUR", "amount": 5000.0},
+            baselines={"currency": "EUR", "amount": 100.0},
             decision_type=DECISION_TYPE,
         )(lambda currency, amount: approve_payment(
             {"currency": currency, "amount": amount}
@@ -76,7 +76,7 @@ def main() -> None:
             payload={
                 "final_answer": outcome,
                 "status": "failure",
-                "note": "Payment exceeding $1000 limit was incorrectly processed.",
+                "note": "USD payment of 2500.0 exceeded the 1000.0 limit and was approved.",
             },
             causal_parent_ids=[decision_event.id],
             causal_parent_seqs=[decision_event.logical_seq],
